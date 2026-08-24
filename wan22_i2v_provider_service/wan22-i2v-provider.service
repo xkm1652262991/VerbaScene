@@ -1,0 +1,22 @@
+[Unit]
+Description=Wan2.2 I2V A14B Provider API
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/verbascene/Wan2.2
+EnvironmentFile=-/etc/verbascene/wan22-i2v.env
+Environment=PYTHONUNBUFFERED=1
+Environment=CUDA_VISIBLE_DEVICES=0
+Environment=PYTHONPATH=/opt/verbascene/VerbaScene/wan22_i2v_provider_service:/opt/verbascene/Wan2.2
+ExecStart=/opt/verbascene/wan22-i2v/.venv/bin/python -m uvicorn provider_server:app --host 0.0.0.0 --port 18083 --workers 1 --log-level info
+Restart=on-failure
+RestartSec=10
+TimeoutStartSec=300
+TimeoutStopSec=90
+KillSignal=SIGINT
+LimitNOFILE=65536
+
+[Install]
+WantedBy=multi-user.target
