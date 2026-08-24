@@ -1,6 +1,7 @@
 import base64
 import json
 import mimetypes
+import tempfile
 import time
 from dataclasses import dataclass
 from decimal import Decimal
@@ -15,11 +16,13 @@ from app.providers.base import ProviderAdapter
 from app.providers.types import (
     ProviderAsset,
     ProviderError,
+    ProviderExecutionMode,
     ProviderRequest,
     ProviderResponse,
     ProviderStatus,
     ProviderType,
     ProviderUsage,
+    SubmissionState,
 )
 
 
@@ -33,6 +36,7 @@ class LTX23ApiProvider(ProviderAdapter):
         "async_api",
         "poll",
         "polling",
+        "cancel",
         "ltx23",
     ]
     reference_images = True
@@ -51,10 +55,13 @@ class LTX23ApiProvider(ProviderAdapter):
         provider_task_id = str(
             uuid5(NAMESPACE_URL, f"{request.project_id}:{request.task_id}:ltx23")
         )
+        submission_state = SubmissionState.NOT_SUBMITTED
         try:
             self.validate_config()
             if request.references:
                 image_input = _primary_image(request)
+                _generation_params(request)
+                submission_state = SubmissionState.UNKNOWN
                 job = self._submit_image_job(
                     request,
                     client_job_id=provider_task_id,
@@ -62,6 +69,8 @@ class LTX23ApiProvider(ProviderAdapter):
                 )
                 generation_mode = "image_to_video"
             else:
+                _generation_params(request)
+                submission_state = SubmissionState.UNKNOWN
                 job = self._submit_text_job(
                     request,
                     client_job_id=provider_task_id,
@@ -69,16 +78,8 @@ class LTX23ApiProvider(ProviderAdapter):
                 generation_mode = "text_to_video"
 
             job_id = _job_id(job)
-            final_status = self._poll_job(job_id)
-            if _normalized_status(final_status) != "succeeded":
-                return _failed_response(
-                    provider_task_id,
-                    "ltx23_job_failed",
-                    _job_error_message(final_status),
-                    raw_response={"job": job, "final_status": final_status},
-                    retryable=False,
-                )
-            video_bytes, content_type = self._download_result(job_id)
+            provider_task_id = job_id
+            submission_state = SubmissionState.ACCEPTED
         except (
             HTTPError,
             URLError,
@@ -94,44 +95,107 @@ class LTX23ApiProvider(ProviderAdapter):
                 message,
                 raw_response=raw_error,
                 retryable=True,
+                submission_state=(
+                    SubmissionState.NOT_SUBMITTED
+                    if isinstance(exc, HTTPError)
+                    else submission_state
+                ),
             )
-
-        mime_type = _video_mime_type(content_type)
-        uri = _persist_video_result(request, job_id, video_bytes, mime_type)
-        width, height = _result_dimensions(request, final_status)
-        duration = Decimal(
-            str(
-                _status_value(final_status, "duration_sec", "duration")
-                or request.params.get("duration_sec")
-                or _duration_from_params(request)
-            )
-        ).quantize(Decimal("0.001"))
-        asset = ProviderAsset(
-            asset_type="video",
-            uri=uri,
-            mime_type=mime_type,
-            width=width,
-            height=height,
-            duration_sec=duration,
-            metadata={
-                "provider_task_id": provider_task_id,
-                "ltx23_job_id": job_id,
-                "generation_mode": generation_mode,
-            },
-        )
         return ProviderResponse(
-            status=ProviderStatus.SUCCEEDED,
+            status=_provider_status(job),
             provider_task_id=provider_task_id,
-            assets=[asset],
+            execution_mode=ProviderExecutionMode.ASYNC,
+            poll_after_sec=settings.ltx23_api_poll_interval_sec,
             raw_response={
                 "model": self.model,
                 "ltx23_job_id": job_id,
                 "generation_mode": generation_mode,
                 "job": job,
-                "final_status": final_status,
-                "content_type": mime_type,
             },
             usage=ProviderUsage(cost=Decimal("0"), unit="USD"),
+        )
+
+    def poll(self, provider_task_id: str) -> ProviderResponse:
+        self.validate_config()
+        status_payload = self._get_job(provider_task_id)
+        status = _provider_status(status_payload)
+        error = None
+        if status in {ProviderStatus.FAILED, ProviderStatus.CANCELLED, ProviderStatus.TIMEOUT}:
+            error = ProviderError(
+                error_code="ltx23_job_failed",
+                error_message=_job_error_message(status_payload),
+                is_retryable=False,
+                submission_state=SubmissionState.ACCEPTED,
+                raw_error=status_payload,
+            )
+        return ProviderResponse(
+            status=status,
+            provider_task_id=provider_task_id,
+            execution_mode=ProviderExecutionMode.ASYNC,
+            poll_after_sec=(
+                settings.ltx23_api_poll_interval_sec
+                if status in {ProviderStatus.QUEUED, ProviderStatus.RUNNING}
+                else None
+            ),
+            raw_response=status_payload,
+            error=error,
+        )
+
+    def fetch_result(
+        self,
+        provider_task_id: str,
+        *,
+        request: ProviderRequest | None = None,
+        provider_context: dict | None = None,
+    ) -> ProviderResponse:
+        _ = provider_context
+        polled = self.poll(provider_task_id)
+        if polled.status != ProviderStatus.SUCCEEDED:
+            return polled
+        if request is None:
+            raise ValueError("LTX-2.3 fetch_result requires the original request snapshot")
+        video_bytes, content_type = self._download_result(provider_task_id)
+        mime_type = _video_mime_type(content_type)
+        uri = _temporary_video_result(provider_task_id, video_bytes, mime_type)
+        width, height = _result_dimensions(request, polled.raw_response)
+        duration = Decimal(
+            str(
+                _status_value(polled.raw_response, "duration_sec", "duration")
+                or request.params.get("duration_sec")
+                or _duration_from_params(request)
+            )
+        ).quantize(Decimal("0.001"))
+        return ProviderResponse(
+            status=ProviderStatus.SUCCEEDED,
+            provider_task_id=provider_task_id,
+            execution_mode=ProviderExecutionMode.ASYNC,
+            assets=[
+                ProviderAsset(
+                    asset_type="video",
+                    uri=uri,
+                    mime_type=mime_type,
+                    width=width,
+                    height=height,
+                    duration_sec=duration,
+                    metadata={
+                        "provider_task_id": provider_task_id,
+                        "ltx23_job_id": provider_task_id,
+                        "temporary_file": True,
+                    },
+                )
+            ],
+            raw_response=polled.raw_response,
+            usage=ProviderUsage(cost=Decimal("0"), unit="USD"),
+        )
+
+    def cancel(self, provider_task_id: str) -> None:
+        self.validate_config()
+        _urlopen_json(
+            Request(
+                f"{self.base_url}/v1/ltx23/jobs/{provider_task_id}",
+                method="DELETE",
+            ),
+            timeout=settings.ltx23_api_timeout_sec,
         )
 
     def _submit_text_job(
@@ -207,23 +271,14 @@ class LTX23ApiProvider(ProviderAdapter):
             timeout=settings.ltx23_api_timeout_sec,
         )
 
-    def _poll_job(self, job_id: str) -> dict:
-        deadline = time.monotonic() + settings.ltx23_api_job_timeout_sec
-        while True:
-            http_request = Request(
+    def _get_job(self, job_id: str) -> dict:
+        return _urlopen_json(
+            Request(
                 f"{self.base_url}/v1/ltx23/jobs/{job_id}",
                 method="GET",
-            )
-            status_payload = _urlopen_json(
-                http_request,
-                timeout=settings.ltx23_api_timeout_sec,
-            )
-            status_value = _normalized_status(status_payload)
-            if status_value in {"succeeded", "failed", "cancelled"}:
-                return status_payload
-            if time.monotonic() >= deadline:
-                raise TimeoutError(f"LTX-2.3 job timed out: {job_id}")
-            time.sleep(settings.ltx23_api_poll_interval_sec)
+            ),
+            timeout=settings.ltx23_api_timeout_sec,
+        )
 
     def _download_result(self, job_id: str) -> tuple[bytes, str]:
         http_request = Request(
@@ -419,7 +474,13 @@ def _multipart_body(
 
 def _urlopen_json(request: Request, *, timeout: float) -> dict:
     with urlopen(request, timeout=timeout) as response:
-        return json.loads(response.read().decode("utf-8"))
+        body = response.read()
+    if not body:
+        return {}
+    parsed = json.loads(body.decode("utf-8"))
+    if not isinstance(parsed, dict):
+        raise ValueError("LTX-2.3 API returned a non-object response")
+    return parsed
 
 
 def _job_id(payload: dict) -> str:
@@ -444,6 +505,18 @@ def _normalized_status(payload: dict) -> str:
     if value in {"canceled", "aborted"}:
         return "cancelled"
     return value
+
+
+def _provider_status(payload: dict) -> ProviderStatus:
+    return {
+        "queued": ProviderStatus.QUEUED,
+        "pending": ProviderStatus.QUEUED,
+        "running": ProviderStatus.RUNNING,
+        "processing": ProviderStatus.RUNNING,
+        "succeeded": ProviderStatus.SUCCEEDED,
+        "failed": ProviderStatus.FAILED,
+        "cancelled": ProviderStatus.CANCELLED,
+    }.get(_normalized_status(payload), ProviderStatus.RUNNING)
 
 
 def _status_value(payload: dict, *keys: str) -> object | None:
@@ -499,27 +572,19 @@ def _video_mime_type(content_type: str) -> str:
     return value if value.startswith("video/") else "video/mp4"
 
 
-def _persist_video_result(
-    request: ProviderRequest,
+def _temporary_video_result(
     job_id: str,
     video_bytes: bytes,
     mime_type: str,
 ) -> str:
     suffix = mimetypes.guess_extension(mime_type) or ".mp4"
-    storage_dir = (
-        Path(settings.storage_root).resolve()
-        / "projects"
-        / request.project_id
-        / "provider-results"
-        / "ltx23"
-    )
-    storage_dir.mkdir(parents=True, exist_ok=True)
-    path = storage_dir / f"{job_id}{suffix}"
-    path.write_bytes(video_bytes)
-    return (
-        f"{settings.public_storage_base_url}/projects/{request.project_id}"
-        f"/provider-results/ltx23/{path.name}"
-    )
+    with tempfile.NamedTemporaryFile(
+        prefix=f"verbascene-ltx23-{job_id}-",
+        suffix=suffix,
+        delete=False,
+    ) as output:
+        output.write(video_bytes)
+        return output.name
 
 
 def _ltx23_model() -> str:
@@ -538,15 +603,18 @@ def _failed_response(
     *,
     raw_response: dict,
     retryable: bool,
+    submission_state: SubmissionState = SubmissionState.NOT_SUBMITTED,
 ) -> ProviderResponse:
     return ProviderResponse(
         status=ProviderStatus.FAILED,
         provider_task_id=provider_task_id,
+        execution_mode=ProviderExecutionMode.ASYNC,
         raw_response=raw_response,
         error=ProviderError(
             error_code=code,
             error_message=message,
             is_retryable=retryable,
+            submission_state=submission_state,
             raw_error=raw_response,
         ),
     )

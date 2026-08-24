@@ -1,7 +1,9 @@
-from fastapi import APIRouter, Depends, Query, status
+from fastapi import APIRouter, Depends, Header, Query, Response, status
 from sqlalchemy.orm import Session
 
 from app.db import get_db
+from app.assets.candidate_regeneration import regenerate_asset_candidate
+from app.platform.tasks.runtime import get_task_runtime
 from app.schemas.common import ApiResponse, PageResponse
 from app.schemas.asset import (
     AssetCandidateCreate,
@@ -10,12 +12,12 @@ from app.schemas.asset import (
     AssetCandidateReviewRequest,
     AssetRead,
 )
+from app.schemas.task import GenerationTaskRead
 from app.services.asset_candidate_service import (
     create_asset_candidate,
     delete_asset_candidate,
     list_asset_candidates_page,
     promote_asset_candidate,
-    regenerate_asset_candidate,
     reject_asset_candidate,
 )
 
@@ -73,19 +75,26 @@ def reject_asset_candidate_endpoint(
 
 @router.post(
     "/api/asset-candidates/{candidate_id}/regenerate",
-    response_model=ApiResponse[AssetCandidateGenerationResponse],
+    response_model=ApiResponse[AssetCandidateGenerationResponse | GenerationTaskRead],
 )
 def regenerate_asset_candidate_endpoint(
     candidate_id: str,
+    response: Response,
     image_provider_profile_id: str | None = Query(default=None),
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
     db: Session = Depends(get_db),
-) -> ApiResponse[AssetCandidateGenerationResponse]:
-    candidate, task = regenerate_asset_candidate(
+) -> ApiResponse[AssetCandidateGenerationResponse | GenerationTaskRead]:
+    result = regenerate_asset_candidate(
         db,
         candidate_id,
         image_provider_profile_id=image_provider_profile_id,
+        idempotency_key=idempotency_key,
     )
-    return ApiResponse(data={"candidates": [candidate], "task_id": task.id})
+    if result.is_async:
+        response.status_code = status.HTTP_202_ACCEPTED
+        get_task_runtime().wake()
+        return ApiResponse(data=result.task)
+    return ApiResponse(data={"candidates": [result.candidate], "task_id": result.task.id})
 
 
 @router.delete("/api/asset-candidates/{candidate_id}", status_code=status.HTTP_204_NO_CONTENT)

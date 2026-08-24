@@ -125,8 +125,8 @@ class Seedance2ProviderContractTests(unittest.TestCase):
             ),
             patch("app.providers.seedance2.urlopen", fake_urlopen),
         ):
-            response = Seedance2ApiProvider().submit(
-                ProviderRequest(
+            provider = Seedance2ApiProvider()
+            request = ProviderRequest(
                     project_id="project-id",
                     task_id="task-id",
                     model="doubao-seedance-2-0-260128",
@@ -148,17 +148,15 @@ class Seedance2ProviderContractTests(unittest.TestCase):
                         }
                     },
                 )
-            )
-
-            result_path = (
-                Path(temp_dir)
-                / "projects"
-                / "project-id"
-                / "provider-results"
-                / "seedance2"
-                / "cgt-seedance-contract.mp4"
-            )
+            submitted = provider.submit(request)
+            self.assertEqual(submitted.status, ProviderStatus.QUEUED)
+            self.assertEqual(poll_count, 0)
+            running = provider.poll(submitted.provider_task_id)
+            self.assertEqual(running.status, ProviderStatus.RUNNING)
+            response = provider.fetch_result(submitted.provider_task_id, request=request)
+            result_path = Path(response.assets[0].uri)
             self.assertEqual(result_path.read_bytes(), b"seedance-video")
+            result_path.unlink()
 
         payload = captured["payload"]
         self.assertEqual(captured["authorization"], "Bearer unit-test-secret")
@@ -187,7 +185,7 @@ class Seedance2ProviderContractTests(unittest.TestCase):
             json.dumps(response.raw_response, ensure_ascii=False),
         )
         self.assertEqual(
-            response.raw_response["request_contract"]["reference_counts"],
+            submitted.raw_response["request_contract"]["reference_counts"],
             {"image": 1, "video": 1, "audio": 1},
         )
 
@@ -251,8 +249,8 @@ class Seedance2ProviderContractTests(unittest.TestCase):
                 ),
                 patch("app.providers.seedance2.urlopen", fake_urlopen),
             ):
-                response = Seedance2ApiProvider().submit(
-                    ProviderRequest(
+                provider = Seedance2ApiProvider()
+                request = ProviderRequest(
                         project_id="project-id",
                         task_id="local-image",
                         model="doubao-seedance-2-0-260128",
@@ -264,7 +262,10 @@ class Seedance2ProviderContractTests(unittest.TestCase):
                             "ratio": "9:16",
                         },
                     )
-                )
+                submitted = provider.submit(request)
+                self.assertEqual(submitted.status, ProviderStatus.QUEUED)
+                response = provider.fetch_result(submitted.provider_task_id, request=request)
+                Path(response.assets[0].uri).unlink()
 
         encoded = captured["payload"]["content"][1]["image_url"]["url"]
         self.assertTrue(encoded.startswith("data:image/png;base64,"))
@@ -308,7 +309,8 @@ class Seedance2ProviderContractTests(unittest.TestCase):
             patch.object(settings, "seedance2_api_key", "unit-test-secret"),
             patch("app.providers.seedance2.urlopen", fake_urlopen),
         ):
-            response = Seedance2ApiProvider().submit(
+            provider = Seedance2ApiProvider()
+            submitted = provider.submit(
                 ProviderRequest(
                     project_id="project-id",
                     task_id="failed-task",
@@ -317,6 +319,7 @@ class Seedance2ProviderContractTests(unittest.TestCase):
                     params={"duration": 8},
                 )
             )
+            response = provider.poll(submitted.provider_task_id)
 
         self.assertEqual(submit_count, 1)
         self.assertEqual(response.status, ProviderStatus.FAILED)
@@ -383,19 +386,20 @@ class Seedance2ProviderContractTests(unittest.TestCase):
             patch("app.providers.seedance2.urlopen", fake_urlopen),
         ):
             provider = Seedance2ApiProvider()
-            response = provider.submit(
-                ProviderRequest(
+            request = ProviderRequest(
                     project_id="project-id",
                     task_id="smart-duration",
                     model="doubao-seedance-2-0-260128",
                     prompt="角色完成一个自然挥手动作。",
                 )
-            )
+            submitted = provider.submit(request)
+            response = provider.fetch_result(submitted.provider_task_id, request=request)
+            Path(response.assets[0].uri).unlink()
 
         self.assertTrue(provider.descriptor()["smart_duration"])
         self.assertEqual(provider.descriptor()["min_duration_sec"], 4)
         self.assertEqual(captured["payload"]["duration"], -1)
-        self.assertEqual(response.raw_response["request_contract"]["duration_mode"], "provider_auto")
+        self.assertEqual(submitted.raw_response["request_contract"]["duration_mode"], "provider_auto")
         self.assertEqual(float(response.assets[0].duration_sec), 7)
 
     def test_fixed_duration_below_four_seconds_fails_before_network(self):

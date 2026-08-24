@@ -8,6 +8,8 @@
 - 完成 Dialogue、内部镜头节拍、状态变体和 Prompt 指纹。
 - 完成 Provider 能力公开。
 - 完成保留原生音轨、无音轨补静音和三种字幕模式的导出。
+- 完成剧本/视频统一任务运行时、租约恢复、父子批次和取消/重试合同。
+- 完成异步视频 Provider 的 `submit / poll / cancel / fetch_result` 拆分与 `LocalMediaStore` 边界。
 - 用 Mock Provider 完成端到端验证。
 
 ## 后续 Provider 里程碑
@@ -16,6 +18,12 @@
 2. 接入 Seedance 视频 Adapter，并映射原生音频、参考输入、最大时长和分辨率能力。
 3. 用真实任务验证 Prompt、资产引用、原生对白/音效和输出可解码性。
 4. 通过人工内容验收后再设置为默认 Provider。
+
+## 后续后端里程碑
+
+1. 将本地任务协议复用到独立 Worker，再验证 PostgreSQL 多实例领取与关闭语义。
+2. 在不改变 `MediaStore` 调用方的前提下增加对象存储实现。
+3. 单独制定前端对 `202 GenerationTask`、父子批次和取消/重试的适配计划。
 
 ## 暂不实施
 

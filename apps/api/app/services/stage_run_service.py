@@ -6,8 +6,9 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.models import GenerationTask, Project, ProjectStageRun
+from app.platform.tasks.repository import TaskRepository
+from app.platform.tasks.types import ACTIVE_TASK_STATUSES
 from app.services.failure_reason_service import normalize_failure_reason
-from app.services.task_service import mark_task_cancelled
 
 
 MANUAL_REGENERATION_STAGES = {"images", "videos"}
@@ -124,8 +125,8 @@ def cancel_stage_run(db: Session, run_id: str) -> ProjectStageRun:
 
     if run.task_id:
         task = db.get(GenerationTask, run.task_id)
-        if task and task.status in {"queued", "running"}:
-            mark_task_cancelled(db, task)
+        if task and task.status in ACTIVE_TASK_STATUSES:
+            TaskRepository().request_cancel(db, task)
 
     db.commit()
     db.refresh(run)

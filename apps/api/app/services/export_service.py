@@ -1,11 +1,11 @@
 import re
 import shlex
+import shutil
 import subprocess
+import tempfile
 from dataclasses import dataclass
 from decimal import Decimal
-from functools import lru_cache
 from pathlib import Path
-from urllib.parse import unquote
 from uuid import NAMESPACE_URL, uuid5
 
 from fastapi import HTTPException, status
@@ -16,6 +16,7 @@ from sqlalchemy.orm import Session
 from app.agents import total_duration
 from app.core.config import settings
 from app.models import Asset, Dialogue, Export, Project, Shot
+from app.platform.media import get_media_store
 from app.services.workflow_state_service import mark_stage_failed, mark_stage_ready, mark_stage_running
 
 
@@ -64,7 +65,6 @@ def compose_project(
     )
     provider_task_id = str(uuid5(NAMESPACE_URL, f"{project_id}:export:{version}:{subtitle_mode}"))
     output_path = _export_output_path(project_id, provider_task_id)
-    output_uri = _export_public_uri(project_id, output_path.name)
     video_has_audio = [_probe_has_audio(asset.uri) for asset in video_assets]
     subtitle_cues = (
         []
@@ -87,16 +87,30 @@ def compose_project(
     ffmpeg_command = shlex.join(ffmpeg_args)
     try:
         _run_ffmpeg(ffmpeg_args, output_path)
-    except HTTPException as exc:
+        output_uri = get_media_store().put_file(
+            project_id,
+            output_path,
+            namespace="exports",
+            filename=output_path.name,
+        )
+        stored_output_path = get_media_store().resolve_local_path(output_uri)
+    except (HTTPException, OSError) as exc:
+        detail = exc.detail if isinstance(exc, HTTPException) else str(exc)
         mark_stage_failed(
             db,
             project_id,
             "export",
-            summary=str(exc.detail),
+            summary=str(detail),
             error_code="ffmpeg_export_failed",
         )
         db.commit()
-        raise
+        shutil.rmtree(output_path.parent, ignore_errors=True)
+        if isinstance(exc, HTTPException):
+            raise
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=f"FFmpeg export persistence failed: {exc}",
+        ) from exc
 
     db.execute(
         update(Asset)
@@ -149,7 +163,7 @@ def compose_project(
             "mode": "ffmpeg",
             "ffmpeg_command": ffmpeg_command,
             "manifest": manifest,
-            "output_path": str(output_path),
+            "output_path": str(stored_output_path),
         },
         status="approved",
         is_selected=True,
@@ -184,6 +198,7 @@ def compose_project(
     db.commit()
     db.refresh(asset)
     db.refresh(export)
+    shutil.rmtree(output_path.parent, ignore_errors=True)
     return export, asset
 
 
@@ -726,20 +741,10 @@ def _run_ffmpeg(args: list[str], output_path: Path) -> None:
 
 
 def _export_output_path(project_id: str, filename_stem: str) -> Path:
-    return (
-        Path(settings.storage_root).resolve()
-        / "projects"
-        / project_id
-        / "exports"
-        / f"{filename_stem}.mp4"
+    work_dir = Path(
+        tempfile.mkdtemp(prefix=f"verbascene-export-{project_id[:8]}-")
     )
-
-
-def _export_public_uri(project_id: str, filename: str) -> str:
-    return (
-        f"{settings.public_storage_base_url.rstrip('/')}"
-        f"/projects/{project_id}/exports/{filename}"
-    )
+    return work_dir / f"{filename_stem}.mp4"
 
 
 def _media_input(uri: str) -> str:
@@ -761,13 +766,12 @@ def _media_input(uri: str) -> str:
 
 def _local_storage_path(uri: str) -> Path | None:
     base_url = settings.public_storage_base_url.rstrip("/") + "/"
-    if not uri.startswith(base_url):
+    if not uri.startswith(base_url) and not uri.startswith("/storage/"):
         return None
-    storage_root = Path(settings.storage_root).resolve()
-    path = (storage_root / unquote(uri[len(base_url) :])).resolve()
-    if path != storage_root and storage_root not in path.parents:
+    try:
+        return get_media_store().resolve_local_path(uri)
+    except (FileNotFoundError, ValueError):
         return None
-    return path
 
 
 def _parse_resolution(resolution: str) -> tuple[int, int]:

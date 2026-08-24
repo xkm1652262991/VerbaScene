@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from copy import deepcopy
 from dataclasses import dataclass
+from datetime import datetime, timezone
 import json
 from typing import Any, Callable
 
@@ -28,7 +29,12 @@ from app.agents.script_prompts import (
 )
 from app.agents.script_screenplay import parse_screenplay_response
 from app.providers.base import ProviderAdapter
-from app.providers.types import ProviderRequest, ProviderResponse, ProviderStatus
+from app.providers.types import (
+    ProviderRequest,
+    ProviderResponse,
+    ProviderStatus,
+    SubmissionState,
+)
 
 
 CheckpointCallback = Callable[[dict[str, Any], str, int], None]
@@ -88,6 +94,8 @@ class ScriptPipelineFailure(RuntimeError):
         message: str,
         checkpoint: dict[str, Any],
         provider_task_id: str | None = None,
+        retryable: bool = False,
+        submission_state: SubmissionState = SubmissionState.ACCEPTED,
     ) -> None:
         super().__init__(message)
         self.phase = phase
@@ -95,6 +103,8 @@ class ScriptPipelineFailure(RuntimeError):
         self.message = message
         self.checkpoint = checkpoint
         self.provider_task_id = provider_task_id
+        self.retryable = retryable
+        self.submission_state = submission_state
 
 
 def run_script_pipeline(
@@ -112,6 +122,22 @@ def run_script_pipeline(
     on_checkpoint: CheckpointCallback | None = None,
 ) -> ScriptPipelineResult:
     state = _initial_checkpoint(checkpoint)
+    inflight = state.get("inflight_phase")
+    if isinstance(inflight, dict):
+        inflight_phase = str(inflight.get("phase") or "provider_submission")
+        if not isinstance(state.get("responses", {}).get(inflight_phase), dict):
+            raise ScriptPipelineFailure(
+                phase=inflight_phase,
+                code="provider_submission_uncertain",
+                message=(
+                    f"The {inflight_phase} provider submission was interrupted "
+                    "before its response was durably recorded"
+                ),
+                checkpoint=deepcopy(state),
+                retryable=False,
+                submission_state=SubmissionState.UNKNOWN,
+            )
+        state.pop("inflight_phase", None)
     critic = review_provider or provider
     critic_model = review_model or model
     critic_system_prompt = review_system_prompt or system_prompt
@@ -342,6 +368,16 @@ def _phase_response(
     if isinstance(existing, dict):
         return existing
 
+    state["inflight_phase"] = {
+        "phase": phase,
+        "attempted_at": datetime.now(timezone.utc).isoformat(),
+    }
+    _publish(
+        state,
+        on_checkpoint,
+        f"{phase} 正在提交 Provider",
+        max(1, progress - 1),
+    )
     response = provider.submit(
         ProviderRequest(
             project_id=source.project_id,
@@ -364,6 +400,7 @@ def _phase_response(
         temperature=temperature,
     )
     responses[phase] = record
+    state.pop("inflight_phase", None)
     state["pipeline_trace"]["phases"].append(
         {
             "phase": phase,
@@ -395,6 +432,15 @@ def _response_record(
         "error_code": response.error.error_code if response.error else None,
         "error_message": response.error.error_message if response.error else None,
         "retryable": response.error.is_retryable if response.error else False,
+        "submission_state": (
+            response.error.submission_state.value
+            if response.error
+            else (
+                SubmissionState.ACCEPTED.value
+                if response.provider_task_id
+                else SubmissionState.UNKNOWN.value
+            )
+        ),
     }
 
 
@@ -407,7 +453,16 @@ def _require_success(state: dict[str, Any], phase: str, record: dict[str, Any]) 
         message=record.get("error_message") or f"{phase} provider failed",
         checkpoint=deepcopy(state),
         provider_task_id=record.get("provider_task_id"),
+        retryable=bool(record.get("retryable")),
+        submission_state=_submission_state(record.get("submission_state")),
     )
+
+
+def _submission_state(value: object) -> SubmissionState:
+    try:
+        return SubmissionState(str(value))
+    except ValueError:
+        return SubmissionState.UNKNOWN
 
 
 def _record_text(record: dict[str, Any]) -> str:

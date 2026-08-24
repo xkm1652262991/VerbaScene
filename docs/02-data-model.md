@@ -82,6 +82,19 @@ project_id + asset_type + entity_type + entity_id + asset_role + variant_key
 
 `ProjectStage` 已删除。活动任务只对同一资源提供重复提交保护。
 
+## GenerationTask
+
+- 状态：`queued / running / waiting_provider / waiting_children / cancelling / succeeded / failed / cancelled`。
+- `parent_task_id`：项目视频批次父子关系。
+- `retry_of_task_id`：人工重试尝试链，不占用批次父子语义。
+- `resource_key / active_dedupe_key`：资源范围与数据库活动去重键。
+- `idempotency_key`：按项目与任务类型幂等。
+- `available_at / lease_owner / lease_expires_at / heartbeat_at`：本地 Worker 领取和恢复信息。
+- `cancel_requested_at`：幂等取消请求时间。
+
+租约所有者是内部实现字段，不输出到 `GenerationTaskRead`。终态必须清空
+`active_dedupe_key` 和租约。
+
 ## Export
 
 - `subtitle_mode`: `none | en | bilingual`

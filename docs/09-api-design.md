@@ -16,7 +16,7 @@ PUT   /api/projects/{project_id}/dialogues
 `16:9 + 854x480`，竖屏可选 `9:16 + 480x854`。`creative_settings`
 不再包含 `audience_age` 或 `learning_objective`；Dialogue 保存接口要求英文文本，中文释义可空。
 
-剧本生成是持久化后台任务。同一项目已有 `queued` 或 `running` 的剧本任务时，重复提交返回 `409`。客户端通过 `GET /api/tasks/{task_id}` 轮询；成功后从 `result_payload.script_id` 或项目最新剧本接口读取结果。任务可以从已保存的蓝图、初稿或审稿检查点恢复，重启后不重复执行已经成功的文本模型阶段。
+剧本生成是持久化后台任务。同一项目已有非终态剧本任务时，数据库唯一约束使重复提交返回 `409`。客户端通过 `GET /api/tasks/{task_id}` 轮询；成功后从 `result_payload.script_id` 或项目最新剧本接口读取结果。任务可以从已保存的蓝图、初稿或审稿检查点恢复，重启后不重复执行已经成功的文本模型阶段。提交结果不确定时不自动重提。
 
 ## 资产与片段
 
@@ -32,6 +32,8 @@ GET   /api/shots/{shot_id}/video-prompt-preview
 POST  /api/shots/{shot_id}/compile-video-prompt
 POST  /api/shots/{shot_id}/image/generate-candidate
 POST  /api/shots/{shot_id}/video/generate-candidate
+POST  /api/projects/{project_id}/shot-videos/generate-candidates
+POST  /api/assets/{asset_id}/regenerate-video-candidate
 ```
 
 参考图接口接受 `variant_key`。模型输出先写入候选，采用与版本选择不改变页面可进入性。
@@ -51,9 +53,25 @@ Provider 实际 `content` 顺序一致。默认最多包含 2 个角色和 1 个
 
 分镜生成只负责语义分段和内部镜头节拍，不要求 LLM 预测 Shot 或 beat 的秒数。每个 Shot 在 `shot_card.beats` 中包含有序的内部镜头，`shot_card.segment_plan.duration_mode` 默认为 `provider_auto`。历史数据里的 `beats[].duration_sec` 继续可读，但不参与 Prompt 编译或片段时长计算。
 
-`POST /api/shots/{shot_id}/video/generate-candidate` 支持 `duration_mode=provider_auto|fixed`。Seedance 2.0 默认使用 `provider_auto`，Adapter 向 Provider 发送 `duration=-1`；返回的真实时长在候选版本被采用后写入现有的 `Shot.duration_sec` 和 `segment_plan.actual_duration_sec`，供时间线、计费展示与合成使用。`fixed` 只是人工高级覆盖，必须同时提交 `duration_sec`。兼容旧客户端时，只提交 `duration_sec` 视为 `fixed`。
+`POST /api/shots/{shot_id}/video/generate-candidate` 返回 `202 + GenerationTask`，并支持 `duration_mode=provider_auto|fixed`。Seedance 2.0 默认使用 `provider_auto`，Adapter 向 Provider 发送 `duration=-1`；返回的真实时长在候选版本被采用后写入现有的 `Shot.duration_sec` 和 `segment_plan.actual_duration_sec`，供时间线、计费展示与合成使用。`fixed` 只是人工高级覆盖，必须同时提交 `duration_sec`。兼容旧客户端时，只提交 `duration_sec` 视为 `fixed`。
+
+项目批次端点返回一个 `waiting_children` 父任务，每个当前 Shot 创建独立子任务。
+任一 Shot 已有活动视频任务时整批 `409`，响应列出冲突 Shot，不会产生部分批次。
 
 固定时长提交前必须同时比较当前 Provider 的 `min_duration_sec` 和 `max_duration_sec`。超出范围返回 `409`，服务不得调用 Provider、截断时长或静默拆分；Provider 不支持智能时长时，显式提交 `provider_auto` 同样返回 `409`。
+
+## 任务 API（破坏性版本）
+
+```text
+GET  /api/tasks?parent_task_id=&task_type=&resource_key=
+GET  /api/tasks/{task_id}
+POST /api/tasks/{task_id}/cancel  -> 202 GenerationTask
+POST /api/tasks/{task_id}/retry   -> 202 GenerationTask
+```
+
+生成端点可接收 `Idempotency-Key`；同一项目、任务类型和 key 返回原任务。
+人工重试只允许 `failed / cancelled`，创建新任务并复用原输入快照。
+`DELETE /api/tasks/{task_id}/queue` 已删除。本版需要后续单独适配前端。
 
 ## 导出
 

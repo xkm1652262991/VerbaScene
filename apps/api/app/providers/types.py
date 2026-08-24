@@ -26,11 +26,18 @@ class ProviderExecutionMode(StrEnum):
     POLL = "poll"
 
 
+class SubmissionState(StrEnum):
+    NOT_SUBMITTED = "not_submitted"
+    ACCEPTED = "accepted"
+    UNKNOWN = "unknown"
+
+
 @dataclass(frozen=True)
 class ProviderError:
     error_code: str
     error_message: str
     is_retryable: bool = False
+    submission_state: SubmissionState = SubmissionState.NOT_SUBMITTED
     raw_error: dict[str, Any] = field(default_factory=dict)
 
 

@@ -21,6 +21,9 @@ def list_generation_tasks(
     *,
     project_id: str | None = None,
     status_filter: str | None = None,
+    parent_task_id: str | None = None,
+    task_type: str | None = None,
+    resource_key: str | None = None,
     offset: int = 0,
     limit: int = 100,
 ) -> tuple[list[GenerationTask], int]:
@@ -29,6 +32,12 @@ def list_generation_tasks(
         filters.append(GenerationTask.project_id == project_id)
     if status_filter:
         filters.append(GenerationTask.status == status_filter)
+    if parent_task_id:
+        filters.append(GenerationTask.parent_task_id == parent_task_id)
+    if task_type:
+        filters.append(GenerationTask.task_type == task_type)
+    if resource_key:
+        filters.append(GenerationTask.resource_key == resource_key)
     statement = select(GenerationTask).where(*filters).order_by(GenerationTask.created_at.desc()).offset(offset).limit(limit)
     total = db.scalar(select(func.count(GenerationTask.id)).where(*filters)) or 0
     return list(db.scalars(statement).all()), int(total)
@@ -115,6 +124,9 @@ def mark_task_succeeded(
     task.raw_response = raw_response if raw_response is not None else task.raw_response
     task.provider_task_id = provider_task_id if provider_task_id is not None else task.provider_task_id
     task.finished_at = datetime.now(timezone.utc)
+    task.active_dedupe_key = None
+    task.lease_owner = None
+    task.lease_expires_at = None
     db.flush()
 
 
@@ -144,6 +156,9 @@ def mark_task_failed(
     task.raw_response = attach_failure_reason(base_raw_response, normalized_failure_reason)
     task.provider_task_id = provider_task_id if provider_task_id is not None else task.provider_task_id
     task.finished_at = datetime.now(timezone.utc)
+    task.active_dedupe_key = None
+    task.lease_owner = None
+    task.lease_expires_at = None
     db.flush()
 
 
@@ -151,4 +166,7 @@ def mark_task_cancelled(db: Session, task: GenerationTask, *, message: str = "ไป
     task.status = "cancelled"
     task.progress_label = message
     task.finished_at = datetime.now(timezone.utc)
+    task.active_dedupe_key = None
+    task.lease_owner = None
+    task.lease_expires_at = None
     db.flush()

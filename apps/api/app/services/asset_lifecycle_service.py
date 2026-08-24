@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import subprocess
+import tempfile
 from decimal import Decimal
 from pathlib import Path
 from uuid import uuid4
@@ -15,6 +16,8 @@ from sqlalchemy.orm import Session
 from app.agents.avd_asset_strategy import avd_asset_metadata
 from app.core.config import settings
 from app.models import Asset, AssetCandidate, GenerationTask, Shot
+from app.platform.media import get_media_store
+from app.platform.tasks.types import ACTIVE_TASK_STATUSES
 from app.services.asset_repository import (
     asset_source_context,
     ensure_asset_target_exists,
@@ -92,14 +95,13 @@ def extract_video_frame_candidate(
 
     source_path = local_media_path(source_asset.uri)
     candidate_id = str(uuid4())
-    output_dir = (
-        Path(settings.storage_root).resolve()
-        / "projects"
-        / source_asset.project_id
-        / "assets"
-        / "extracted-frames"
+    temporary_output = tempfile.NamedTemporaryFile(
+        prefix=f"verbascene-frame-{candidate_id}-",
+        suffix=".png",
+        delete=False,
     )
-    output_path = output_dir / f"{candidate_id}.png"
+    temporary_output.close()
+    output_path = Path(temporary_output.name)
     task = create_generation_task(
         db,
         project_id=source_asset.project_id,
@@ -112,7 +114,6 @@ def extract_video_frame_candidate(
         provider="local",
         model="ffmpeg",
     )
-    output_dir.mkdir(parents=True, exist_ok=True)
     args = [
         settings.ffmpeg_path,
         "-y",
@@ -167,6 +168,13 @@ def extract_video_frame_candidate(
 
     with Image.open(output_path) as image:
         width, height = image.size
+    candidate_uri = get_media_store().put_file(
+        source_asset.project_id,
+        output_path,
+        namespace="assets/extracted-frames",
+        filename=f"{candidate_id}.png",
+    )
+    output_path.unlink(missing_ok=True)
     candidate = AssetCandidate(
         id=candidate_id,
         project_id=source_asset.project_id,
@@ -186,10 +194,7 @@ def extract_video_frame_candidate(
             source_asset.entity_id,
             "shot_storyboard",
         ),
-        uri=(
-            f"{settings.public_storage_base_url.rstrip('/')}"
-            f"/projects/{source_asset.project_id}/assets/extracted-frames/{candidate_id}.png"
-        ),
+        uri=candidate_uri,
         mime_type="image/png",
         width=width,
         height=height,
@@ -239,12 +244,14 @@ def upload_image_asset(
         resolved_variant_key = ""
 
     extension = safe_image_extension(filename, content_type)
-    storage_dir = Path(settings.storage_root).resolve() / "projects" / project_id / "uploads" / "images"
-    storage_dir.mkdir(parents=True, exist_ok=True)
     stored_name = f"{entity_type}_{entity_id}_{uuid4().hex}{extension}"
-    path = storage_dir / stored_name
-    path.write_bytes(content)
-
+    uri = get_media_store().put_bytes(
+        project_id,
+        content,
+        namespace="uploads/images",
+        filename=stored_name,
+    )
+    path = local_media_path(uri)
     width, height = read_image_size(path)
     db.execute(
         update(Asset)
@@ -281,7 +288,7 @@ def upload_image_asset(
         source_script_id=source_script_id,
         source_shot_batch_id=source_shot_batch_id,
         version=version,
-        uri=f"{settings.public_storage_base_url}/projects/{project_id}/uploads/images/{stored_name}",
+        uri=uri,
         mime_type=content_type,
         width=width,
         height=height,
@@ -311,6 +318,30 @@ def delete_asset(db: Session, asset_id: str) -> None:
     asset = db.get(Asset, asset_id)
     if asset is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Asset not found")
+    active_tasks = list(
+        db.scalars(
+            select(GenerationTask)
+            .where(GenerationTask.project_id == asset.project_id)
+            .where(GenerationTask.status.in_(tuple(ACTIVE_TASK_STATUSES)))
+        ).all()
+    )
+    blocking_task = next(
+        (
+            task
+            for task in active_tasks
+            if _payload_contains_identifier(task.input_payload, asset.id)
+        ),
+        None,
+    )
+    if blocking_task is not None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "code": "asset_in_use_by_active_task",
+                "message": "资产已被活动生成任务的输入快照引用",
+                "task_id": blocking_task.id,
+            },
+        )
 
     project_id = asset.project_id
     asset_type = asset.asset_type
@@ -337,6 +368,14 @@ def delete_asset(db: Session, asset_id: str) -> None:
             replacement.is_selected = True
             db.add(replacement)
     db.commit()
+
+
+def _payload_contains_identifier(value: object, identifier: str) -> bool:
+    if isinstance(value, dict):
+        return any(_payload_contains_identifier(item, identifier) for item in value.values())
+    if isinstance(value, list):
+        return any(_payload_contains_identifier(item, identifier) for item in value)
+    return isinstance(value, str) and value == identifier
 
 
 def apply_actual_video_duration_to_shot(

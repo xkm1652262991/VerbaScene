@@ -8,15 +8,18 @@
 FastAPI
   → 领域服务
   → SQLite（默认）或 PostgreSQL
-  → 本地媒体存储
-  → 进程内剧本/视频队列
+  → LocalMediaStore
+  → 数据库租约任务运行时
   → LLM / Image / Video Provider Adapter
   → FFmpeg 导出
 ```
 
-剧本生成和单镜头视频生成使用持久化 `GenerationTask` 与进程内线程队列。剧本阶段在每次成功模型调用后保存检查点，API 重启后可以继续；视频运行中断后会标记失败并要求重新排队。
+剧本、单镜头视频、视频重生成和项目视频批次共用持久化
+`GenerationTask`。数据库是任务真相源，本地线程只负责领取、续租和唤醒。
+剧本从最后成功检查点继续；已受理的异步视频任务只恢复轮询，不会重复提交。
 
-当前没有 Celery、LangGraph 或多实例分布式队列。其他图片与 FFmpeg 操作仍可能同步执行。
+当前没有 Celery、Redis 队列、LangGraph 或多实例 Worker。图片生成与 FFmpeg
+导出仍是同步 API。
 
 ## 本地开发
 
@@ -66,6 +69,25 @@ alembic upgrade head
 
 不要对本地 SQLite 文件运行 PostgreSQL Alembic 历史。
 
+SQLite 任务结构升级前会在数据库同目录生成
+`content.sqlite3.pre-20260824_unified_task_runtime_v1-*.bak`。迁移保留项目、任务和媒体；
+旧版运行中视频任务因无法确定 Provider 是否已受理，会以
+`provider_submission_uncertain` 失败保留，不自动重提。
+
+## 本地任务运行时
+
+```env
+VIDEO_GENERATION_CONCURRENCY=2
+TASK_POLL_INTERVAL_SEC=0.5
+TASK_LEASE_SEC=60
+TASK_HEARTBEAT_SEC=15
+TASK_SHUTDOWN_TIMEOUT_SEC=30
+```
+
+剧本 Worker 固定为 1；视频 Worker 上限为 2。关闭时先停止领取新任务，再等待当前
+Handler；未完成工作可通过过期租约恢复。详细状态机和取消/重试语义见
+[`docs/26-backend-task-runtime.md`](../../docs/26-backend-task-runtime.md)。
+
 ## Provider
 
 运行槽位为 `llm`、`image` 和 `video`。内置目录包含 Mock、OpenAI-compatible、DashScope、Gemini、ComfyUI、Seedance、LTX、Wan 等 Adapter；注册成功不代表已经配置或完成真实生成验收。
@@ -83,6 +105,10 @@ POST   /api/providers/test
 ## OpenAPI 合同
 
 前后端合同位于 `../../docs/api/openapi.json`：
+
+> 当前后端合同是破坏性版本：视频生成与重生成端点返回
+> `202 + GenerationTask`，新增 `POST /api/tasks/{id}/cancel|retry`，并删除旧的
+> `DELETE /api/tasks/{id}/queue`。本轮没有修改前端，需后续单独适配。
 
 ```bash
 .venv/bin/python scripts/export_openapi.py
@@ -109,7 +135,7 @@ POST   /api/providers/test
 
 ## 当前边界
 
-- 单机线程队列不能协调多个 API 实例。
+- 本地租约运行时只以单 API 进程为部署目标，尚未宣称多实例就绪。
 - 运行中的外部视频请求不能保证被立即取消。
 - 当前没有用户鉴权、角色权限和受控 `/storage` 访问。
 - SQLite 适合单机联调，不适合多人并发写入。

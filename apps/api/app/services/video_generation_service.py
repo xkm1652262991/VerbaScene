@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Any
 from uuid import uuid4
@@ -46,7 +47,7 @@ from app.services.media_generation_support import (
     with_avd_asset_usage,
 )
 from app.services.media_storage_service import materialize_data_uri
-from app.services.task_service import mark_task_failed, mark_task_running, update_task_progress
+from app.services.task_service import mark_task_failed, mark_task_running, mark_task_succeeded, update_task_progress
 from app.services.workflow_state_service import (
     mark_downstream_stages_pending,
     mark_stage_approved,
@@ -54,6 +55,248 @@ from app.services.workflow_state_service import (
     mark_stage_ready,
     mark_stage_running,
 )
+
+
+VIDEO_CANDIDATE_TASK_TYPE = "shot_video_candidate_generation"
+
+
+def compile_video_candidate_task_input(
+    db: Session,
+    shot: Shot,
+    *,
+    duration_mode: str | None = None,
+    duration_sec: Decimal | None = None,
+    video_prompt: str | None = None,
+    source_asset: Asset | None = None,
+    update_shot: bool = False,
+    provider_name: str | None = None,
+    model: str | None = None,
+) -> tuple[dict[str, Any], Any]:
+    """Freeze every provider-relevant value before the task is queued."""
+    provider = provider_registry.get(
+        ProviderType.VIDEO,
+        provider_name or settings.video_provider,
+    )
+    resolved_model = model or provider.model
+    resolved_duration_mode, resolved_duration = _resolve_video_duration_request(
+        provider,
+        shot,
+        duration_mode=duration_mode,
+        duration_sec=duration_sec,
+    )
+    if update_shot:
+        if resolved_duration_mode == "fixed" and resolved_duration is not None:
+            shot.duration_sec = resolved_duration
+        shot.shot_card = _shot_card_with_duration_mode(shot.shot_card, resolved_duration_mode)
+        if video_prompt is not None:
+            shot.video_prompt = video_prompt.strip() or None
+            shot.shot_card = _shot_card_with_video_prompt(shot.shot_card, shot.video_prompt)
+        db.add(shot)
+        db.flush()
+
+    image_asset = resolve_shot_video_input_asset(db, shot)
+    asset_resolution = resolve_generation_assets(
+        db,
+        shot.project_id,
+        stage="shot_video",
+        shot=shot,
+        fallback_image_asset=image_asset,
+    )
+    shot_characters, scene, shot_props = _shot_entities_from_context(
+        shot,
+        _project_prompt_context(db, shot.project_id),
+    )
+    prompt = shot_video_prompt(shot, characters=shot_characters, scene=scene, props=shot_props)
+    video_params = _shot_video_provider_params(
+        shot,
+        provider,
+        duration_mode=resolved_duration_mode,
+        duration_sec=resolved_duration,
+    )
+    reference_metadata = asset_resolution.reference_metadata
+    request_metadata = with_avd_asset_usage(
+        {
+            "image_asset_id": image_asset.id if image_asset else None,
+            "asset_resolution": asset_resolution.to_task_payload(),
+            "candidate_policy": "pending_review_before_asset",
+            "input_fingerprint": (shot.shot_card or {}).get("prompt_fingerprint"),
+            "provider_capabilities": _public_provider_capabilities(provider),
+            "duration_request": _duration_request_metadata(video_params),
+        },
+        asset_type="video",
+        asset_role="shot_video",
+        entity_type="shot",
+    )
+    payload: dict[str, Any] = {
+        "shot_id": shot.id,
+        "shot_no": shot.shot_no,
+        "duration_mode": resolved_duration_mode,
+        "duration_sec": str(resolved_duration) if resolved_duration is not None else None,
+        "video_prompt": shot.video_prompt,
+        "image_asset_id": image_asset.id if image_asset else None,
+        "video_reference_source": "manual" if image_asset else "none",
+        "candidate_policy": "pending_review_before_asset",
+        "asset_resolution": asset_resolution.to_task_payload(),
+        "source_asset_id": source_asset.id if source_asset else None,
+        "source_asset_version": source_asset.version if source_asset else None,
+        "provider_request": {
+            "model": resolved_model,
+            "prompt": prompt,
+            "negative_prompt": shot.negative_prompt,
+            "references": list(asset_resolution.references),
+            "params": {
+                **video_params,
+                "reference_mode": reference_metadata.get("reference_mode", "none"),
+            },
+            "metadata": {
+                "entity_type": "shot",
+                "entity_id": shot.id,
+                "image_asset_id": image_asset.id if image_asset else None,
+                "asset_resolution": asset_resolution.to_task_payload(),
+                "candidate_policy": "pending_review_before_asset",
+                "avd_asset_purpose": request_metadata["avd_asset_purpose"],
+                "avd_asset_usage": request_metadata["avd_asset_usage"],
+                "duration_request": request_metadata["duration_request"],
+                **reference_metadata,
+            },
+        },
+        "request_metadata": request_metadata,
+        "shot_prompt_audits": [
+            {
+                "shot_id": shot.id,
+                "final_prompt": prompt,
+                "input_fingerprint": (shot.shot_card or {}).get("prompt_fingerprint"),
+                "reference_asset_ids": _reference_asset_ids(asset_resolution),
+                "provider": provider.name,
+                "model": resolved_model,
+                "duration_request": _duration_request_metadata(video_params),
+                "provider_capabilities": _public_provider_capabilities(provider),
+            }
+        ],
+    }
+    return payload, provider
+
+
+def persist_video_candidate_task_result(
+    db: Session,
+    task: GenerationTask,
+    response: ProviderResponse,
+) -> AssetCandidate:
+    """Persist and adopt a candidate from a frozen task snapshot."""
+    payload = task.input_payload if isinstance(task.input_payload, dict) else {}
+    request_payload = payload.get("provider_request")
+    if not isinstance(request_payload, dict):
+        raise ValueError("Video task provider request snapshot is missing")
+    shot_id = str(payload.get("shot_id") or "")
+    shot = db.get(Shot, shot_id)
+    if shot is None:
+        raise ValueError("Video task shot no longer exists")
+    candidate = _persist_provider_video_candidate(
+        db,
+        project_id=task.project_id,
+        entity_type="shot",
+        entity_id=shot_id,
+        provider_name=str(task.provider or ""),
+        model=str(task.model or request_payload.get("model") or ""),
+        prompt=str(request_payload.get("prompt") or ""),
+        negative_prompt=(
+            str(request_payload.get("negative_prompt"))
+            if request_payload.get("negative_prompt") is not None
+            else None
+        ),
+        response=response,
+        source_task_id=task.id,
+        request_metadata=(
+            payload.get("request_metadata")
+            if isinstance(payload.get("request_metadata"), dict)
+            else {}
+        ),
+    )
+
+    source_candidate_id = str(payload.get("source_candidate_id") or "")
+    if source_candidate_id:
+        source_candidate = db.get(AssetCandidate, source_candidate_id)
+        if source_candidate is not None and source_candidate.status == "pending_review":
+            source_candidate.status = "rejected"
+            source_candidate.review_note = f"已由重新生成候选 {candidate.id} 替代"
+            source_candidate.rejected_at = datetime.now(timezone.utc)
+            db.add(source_candidate)
+        candidate.raw_response = {
+            **dict(candidate.raw_response or {}),
+            "regeneration": {
+                "source_candidate_id": source_candidate_id,
+                "source_candidate_version": payload.get("source_candidate_version"),
+            },
+        }
+        db.add(candidate)
+
+    from app.services.asset_candidate_service import promote_asset_candidate
+
+    promote_asset_candidate(
+        db,
+        candidate.id,
+        review_note="生成成功后自动采用为当前版本",
+        commit=False,
+    )
+    current_shot_ids = set(
+        db.scalars(
+            select(Shot.id)
+            .where(Shot.project_id == shot.project_id)
+            .where(Shot.is_current.is_(True))
+        ).all()
+    )
+    selected_video_shot_ids = set(
+        db.scalars(
+            select(Asset.entity_id)
+            .where(Asset.project_id == shot.project_id)
+            .where(Asset.asset_type == "video")
+            .where(Asset.entity_type == "shot")
+            .where(Asset.status == "approved")
+            .where(Asset.is_selected.is_(True))
+        ).all()
+    )
+    if current_shot_ids and current_shot_ids.issubset(selected_video_shot_ids):
+        mark_stage_approved(
+            db,
+            shot.project_id,
+            "videos",
+            summary=f"{len(current_shot_ids)} 个镜头视频已生成并自动采用",
+            metadata={"asset_count": len(current_shot_ids), "auto_adopt": True},
+        )
+    else:
+        mark_stage_ready(
+            db,
+            shot.project_id,
+            "videos",
+            task_id=task.id,
+            summary=f"镜头 {shot.shot_no} 视频已生成并设为当前版本",
+            metadata={"candidate_count": 1, "kind": task.task_type, "shot_id": shot.id},
+        )
+    mark_downstream_stages_pending(
+        db,
+        shot.project_id,
+        "videos",
+        summary="视频版本已更新，需要重新导出",
+    )
+    mark_task_succeeded(
+        db,
+        task,
+        result_payload={
+            "candidate_ids": [candidate.id],
+            "candidate_count": 1,
+            "candidate_policy": "pending_review_before_asset",
+        },
+        raw_response={
+            **dict(task.raw_response or {}),
+            "provider_result": sanitize_large_payload(response.raw_response),
+        },
+        provider_task_id=response.provider_task_id,
+    )
+    db.add(task)
+    db.commit()
+    db.refresh(candidate)
+    db.refresh(task)
+    return candidate
 
 
 def generate_shot_videos(db: Session, project_id: str) -> tuple[list[Asset], GenerationTask]:

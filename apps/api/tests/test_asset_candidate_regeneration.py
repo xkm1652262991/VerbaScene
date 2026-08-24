@@ -7,12 +7,12 @@ from fastapi import HTTPException
 from sqlalchemy.orm import sessionmaker
 
 from app.db.session import create_database_engine, initialize_database
+from app.assets.candidate_regeneration import regenerate_asset_candidate
 from app.models import AssetCandidate, Character, Project, Shot
 from app.providers.types import ProviderAsset, ProviderError, ProviderResponse, ProviderStatus
 from app.services.asset_candidate_service import (
     delete_asset_candidate,
     list_asset_candidates,
-    regenerate_asset_candidate,
 )
 from app.services.asset_repository import next_candidate_version
 from app.services.image_provider_profile_service import ImageProviderSelection
@@ -134,7 +134,8 @@ class AssetCandidateRegenerationTests(unittest.TestCase):
                 ),
                 patch("app.services.image_generation_service._image_consistency_check", return_value=None),
             ):
-                replacement, task = regenerate_asset_candidate(db, source.id)
+                result = regenerate_asset_candidate(db, source.id)
+                replacement, task = result.candidate, result.task
 
             db.refresh(source)
             self.assertEqual(source.status, "rejected")
@@ -217,7 +218,8 @@ class AssetCandidateRegenerationTests(unittest.TestCase):
                 ),
                 patch("app.services.image_generation_service._image_consistency_check", return_value=None),
             ):
-                replacement, _task = regenerate_asset_candidate(db, source.id)
+                result = regenerate_asset_candidate(db, source.id)
+                replacement = result.candidate
 
             self.assertEqual(provider.requests[0].negative_prompt, "当前镜头负面提示词，完整人物")
             self.assertEqual(replacement.negative_prompt, "当前镜头负面提示词，完整人物")

@@ -38,7 +38,7 @@ VerbaScene 是一个面向内部内容生产的 AIGC 工作台：将创意描述
 | 剧本 | AI 创意与导入剧本两种入口；结构化剧本；A1 英文对白；可选中文释义；生成、审稿和定点修订记录 |
 | 资产 | 角色、场景、道具；剧情状态变体；图片候选；采用/拒绝；历史版本；引用关系 |
 | 视频制作 | Shot 与内部 beats；可编辑最终 Prompt；参考资产；可选显式首帧；视频候选与采用版本 |
-| 任务 | 持久化任务记录；剧本与单镜头视频的进程内队列；同资源防重复提交；剧本检查点恢复 |
+| 任务 | 数据库真相源；租约/心跳恢复；剧本和视频统一 Worker；父子批次；取消、人工重试与资源级去重 |
 | 导出 | FFmpeg 拼接；保留视频原生音轨；无音轨片段补静音；无字幕、英文、中英双语三种模式 |
 | 数据 | 默认 SQLite；可切换 PostgreSQL；Alembic 迁移；本地文件存储 |
 | 模型 | Mock、OpenAI-compatible、DashScope、Gemini、ComfyUI、Seedance、LTX、Wan 等 Adapter 目录 |
@@ -50,15 +50,15 @@ VerbaScene 是一个面向内部内容生产的 AIGC 工作台：将创意描述
 ```mermaid
 flowchart LR
   UI["React + TypeScript 工作台"] --> API["FastAPI 模块化单体"]
-  API --> DOMAIN["剧本 / 资产 / Shot / 导出领域服务"]
+  API --> DOMAIN["剧本 / 资产 / 制作 / 导出模块"]
   DOMAIN --> DB["SQLite 或 PostgreSQL"]
-  DOMAIN --> FILES["本地媒体存储"]
-  DOMAIN --> QUEUE["进程内任务队列"]
-  QUEUE --> PROVIDERS["LLM / Image / Video Adapters"]
+  DOMAIN --> FILES["LocalMediaStore"]
+  DOMAIN --> RUNTIME["租约式本地任务运行时"]
+  RUNTIME --> PROVIDERS["LLM / Image / Video Adapters"]
   DOMAIN --> FFMPEG["FFmpeg 合成与字幕"]
 ```
 
-当前任务队列用于单机运行，不是 Celery 或多实例分布式队列；当前工作流也没有使用 LangGraph。详细边界见 [当前架构](docs/21-current-architecture.md)。
+当前任务运行时用于单 API 进程，不是 Celery 或多实例分布式队列；当前工作流也没有使用 LangGraph。详细边界见 [当前架构](docs/21-current-architecture.md) 和 [后端任务运行时](docs/26-backend-task-runtime.md)。
 
 ## 技术栈
 
@@ -127,7 +127,7 @@ tools/                    可选模型服务工具与公开 submodule
 当前已经具备可运行工作台、Mock 合同链路、真实 Provider Adapter 和短样片产物，但还不能描述为“生产就绪”：
 
 - 当前真实成片证据最长约 32.5 秒，尚未完成当前产品合同下的 1–3 分钟验收。
-- 任务队列为进程内线程队列，不支持多实例协调。
+- 租约式本地任务运行时尚未完成多实例生产验证。
 - 暂无登录、权限、配额、成本治理和受控媒体访问。
 - 真实 Provider 的参考图消费、原生音频和失败恢复仍需逐个模型验收。
 - `output/` 与 `storage/` 中包含本地实验产物，不作为 Git 仓库内容分发。
@@ -142,4 +142,5 @@ tools/                    可选模型服务工具与公开 submodule
 - [生成流水线](docs/05-generation-pipeline.md)
 - [FFmpeg 合成](docs/07-ffmpeg-composition.md)
 - [当前架构](docs/21-current-architecture.md)
+- [后端任务运行时](docs/26-backend-task-runtime.md)
 - [Demo 与验证证据](docs/25-demo-evidence.md)

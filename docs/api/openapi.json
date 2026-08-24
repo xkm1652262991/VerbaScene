@@ -822,6 +822,31 @@
         "title": "ApiResponse[ShotVideoPromptPreviewRead]",
         "type": "object"
       },
+      "ApiResponse_Union_AssetCandidateGenerationResponse__GenerationTaskRead__": {
+        "properties": {
+          "data": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AssetCandidateGenerationResponse"
+              },
+              {
+                "$ref": "#/components/schemas/GenerationTaskRead"
+              }
+            ],
+            "title": "Data"
+          },
+          "success": {
+            "default": true,
+            "title": "Success",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "data"
+        ],
+        "title": "ApiResponse[Union[AssetCandidateGenerationResponse, GenerationTaskRead]]",
+        "type": "object"
+      },
       "ApiResponse_dict_": {
         "properties": {
           "data": {
@@ -2934,6 +2959,25 @@
       },
       "GenerationTaskRead": {
         "properties": {
+          "cancel_requested_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cancel Requested At"
+          },
+          "child_summary": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "title": "Child Summary",
+            "type": "object"
+          },
           "context_links": {
             "items": {
               "$ref": "#/components/schemas/TaskContextLinkRead"
@@ -2992,14 +3036,41 @@
             ],
             "title": "Finished At"
           },
+          "heartbeat_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Heartbeat At"
+          },
           "id": {
             "title": "Id",
             "type": "string"
+          },
+          "idempotency_key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Idempotency Key"
           },
           "input_payload": {
             "additionalProperties": true,
             "title": "Input Payload",
             "type": "object"
+          },
+          "max_retries": {
+            "title": "Max Retries",
+            "type": "integer"
           },
           "model": {
             "anyOf": [
@@ -3018,6 +3089,17 @@
             },
             "title": "Output Asset Ids",
             "type": "array"
+          },
+          "parent_task_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Parent Task Id"
           },
           "progress": {
             "title": "Progress",
@@ -3065,6 +3147,17 @@
             "title": "Raw Response",
             "type": "object"
           },
+          "resource_key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Resource Key"
+          },
           "result_payload": {
             "additionalProperties": true,
             "title": "Result Payload",
@@ -3073,6 +3166,17 @@
           "retry_count": {
             "title": "Retry Count",
             "type": "integer"
+          },
+          "retry_of_task_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Retry Of Task Id"
           },
           "started_at": {
             "anyOf": [
@@ -3104,6 +3208,10 @@
           "id",
           "project_id",
           "task_type",
+          "parent_task_id",
+          "retry_of_task_id",
+          "resource_key",
+          "idempotency_key",
           "provider",
           "model",
           "provider_task_id",
@@ -3114,11 +3222,15 @@
           "progress",
           "progress_label",
           "retry_count",
+          "max_retries",
           "error_code",
           "error_message",
           "cost_estimate",
           "raw_response",
+          "child_summary",
           "context_links",
+          "heartbeat_at",
+          "cancel_requested_at",
           "started_at",
           "finished_at",
           "created_at",
@@ -7671,6 +7783,22 @@
               ],
               "title": "Image Provider Profile Id"
             }
+          },
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Idempotency-Key"
+            }
           }
         ],
         "responses": {
@@ -7678,7 +7806,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ApiResponse_AssetCandidateGenerationResponse_"
+                  "$ref": "#/components/schemas/ApiResponse_Union_AssetCandidateGenerationResponse__GenerationTaskRead__"
                 }
               }
             },
@@ -8280,14 +8408,30 @@
               "title": "Asset Id",
               "type": "string"
             }
+          },
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Idempotency-Key"
+            }
           }
         ],
         "responses": {
-          "200": {
+          "202": {
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ApiResponse_AssetCandidateGenerationResponse_"
+                  "$ref": "#/components/schemas/ApiResponse_GenerationTaskRead_"
                 }
               }
             },
@@ -11362,6 +11506,22 @@
               "title": "Project Id",
               "type": "string"
             }
+          },
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Idempotency-Key"
+            }
           }
         ],
         "responses": {
@@ -11946,14 +12106,30 @@
               "title": "Project Id",
               "type": "string"
             }
+          },
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Idempotency-Key"
+            }
           }
         ],
         "responses": {
-          "200": {
+          "202": {
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ApiResponse_AssetCandidateGenerationResponse_"
+                  "$ref": "#/components/schemas/ApiResponse_GenerationTaskRead_"
                 }
               }
             },
@@ -14529,6 +14705,22 @@
               "title": "Shot Id",
               "type": "string"
             }
+          },
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Idempotency-Key"
+            }
           }
         ],
         "requestBody": {
@@ -14542,7 +14734,7 @@
           "required": true
         },
         "responses": {
-          "200": {
+          "202": {
             "content": {
               "application/json": {
                 "schema": {
@@ -14643,6 +14835,54 @@
                 }
               ],
               "title": "Status"
+            }
+          },
+          {
+            "in": "query",
+            "name": "parent_task_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Parent Task Id"
+            }
+          },
+          {
+            "in": "query",
+            "name": "task_type",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Task Type"
+            }
+          },
+          {
+            "in": "query",
+            "name": "resource_key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Resource Key"
             }
           },
           {
@@ -14947,9 +15187,9 @@
         ]
       }
     },
-    "/api/tasks/{task_id}/queue": {
-      "delete": {
-        "operationId": "cancel_queued_generation_task_endpoint_api_tasks__task_id__queue_delete",
+    "/api/tasks/{task_id}/cancel": {
+      "post": {
+        "operationId": "cancel_generation_task_endpoint_api_tasks__task_id__cancel_post",
         "parameters": [
           {
             "in": "path",
@@ -14962,7 +15202,7 @@
           }
         ],
         "responses": {
-          "200": {
+          "202": {
             "content": {
               "application/json": {
                 "schema": {
@@ -15023,7 +15263,89 @@
             "description": "Internal server error"
           }
         },
-        "summary": "Cancel Queued Generation Task Endpoint",
+        "summary": "Cancel Generation Task Endpoint",
+        "tags": [
+          "tasks"
+        ]
+      }
+    },
+    "/api/tasks/{task_id}/retry": {
+      "post": {
+        "operationId": "retry_generation_task_endpoint_api_tasks__task_id__retry_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "task_id",
+            "required": true,
+            "schema": {
+              "title": "Task Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse_GenerationTaskRead_"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Bad request"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Resource not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "State conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation error"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Internal server error"
+          }
+        },
+        "summary": "Retry Generation Task Endpoint",
         "tags": [
           "tasks"
         ]

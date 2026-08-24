@@ -5,6 +5,7 @@ from sqlalchemy import func, select, update
 from sqlalchemy.orm import Session
 
 from app.models import Asset, AssetCandidate, GenerationTask
+from app.platform.tasks.types import ACTIVE_TASK_STATUSES
 from app.schemas.asset import AssetCandidateCreate
 from app.services.asset_lifecycle_service import apply_actual_video_duration_to_shot
 from app.services.asset_repository import (
@@ -12,9 +13,7 @@ from app.services.asset_repository import (
     next_asset_version,
     next_candidate_version,
 )
-from app.services.image_generation_service import regenerate_image_candidate_from_candidate
 from app.services.media_storage_service import unlink_local_storage_file
-from app.services.video_generation_service import generate_single_shot_video_candidate
 from app.services.workflow_state_service import mark_downstream_stages_pending
 
 
@@ -147,6 +146,7 @@ def promote_asset_candidate(
     candidate_id: str,
     *,
     review_note: str | None = None,
+    commit: bool = True,
 ) -> Asset:
     candidate = db.get(AssetCandidate, candidate_id)
     if candidate is None:
@@ -227,8 +227,11 @@ def promote_asset_candidate(
         mark_downstream_stages_pending(db, asset.project_id, "images", summary="图片已更新，需要重新生成视频和后续内容")
     elif asset.asset_type == "video":
         mark_downstream_stages_pending(db, asset.project_id, "videos", summary="视频版本已采用，需要重新导出")
-    db.commit()
-    db.refresh(asset)
+    if commit:
+        db.commit()
+        db.refresh(asset)
+    else:
+        db.flush()
     return asset
 
 
@@ -256,6 +259,21 @@ def delete_asset_candidate(db: Session, candidate_id: str) -> None:
     candidate = db.get(AssetCandidate, candidate_id)
     if candidate is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Asset candidate not found")
+    blocking_task = db.scalar(
+        select(GenerationTask)
+        .where(GenerationTask.project_id == candidate.project_id)
+        .where(GenerationTask.status.in_(tuple(ACTIVE_TASK_STATUSES)))
+        .where(GenerationTask.input_payload["source_candidate_id"].as_string() == candidate.id)
+    )
+    if blocking_task is not None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "code": "asset_candidate_in_use_by_active_task",
+                "message": "候选资产已被活动重生成任务引用",
+                "task_id": blocking_task.id,
+            },
+        )
     if candidate.status == "promoted" or candidate.promoted_asset_id or candidate.asset_id:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -282,59 +300,3 @@ def delete_asset_candidate(db: Session, candidate_id: str) -> None:
     db.add(candidate)
     db.commit()
     unlink_local_storage_file(original_uri)
-
-
-def regenerate_asset_candidate(
-    db: Session,
-    candidate_id: str,
-    *,
-    image_provider_profile_id: str | None = None,
-) -> tuple[AssetCandidate, GenerationTask]:
-    source_candidate = db.get(AssetCandidate, candidate_id)
-    if source_candidate is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Asset candidate not found")
-    if source_candidate.status not in OPEN_CANDIDATE_STATUSES:
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Asset candidate is not pending review")
-
-    if source_candidate.asset_type == "image":
-        replacement, task = regenerate_image_candidate_from_candidate(
-            db,
-            source_candidate,
-            image_provider_profile_id=image_provider_profile_id,
-        )
-    elif source_candidate.asset_type == "video":
-        if source_candidate.entity_type != "shot" or not source_candidate.entity_id:
-            raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                detail="Only shot video candidates can be regenerated",
-            )
-        replacement, task = generate_single_shot_video_candidate(db, source_candidate.entity_id)
-    else:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail="Only image and video candidates can be regenerated",
-        )
-
-    source_candidate.status = "rejected"
-    source_candidate.review_note = f"已由重新生成候选 {replacement.id} 替代"
-    source_candidate.rejected_at = datetime.now(timezone.utc)
-    replacement.raw_response = {
-        **(replacement.raw_response or {}),
-        "regeneration": {
-            "source_candidate_id": source_candidate.id,
-            "source_candidate_version": source_candidate.version,
-        },
-    }
-    task.input_payload = {
-        **(task.input_payload or {}),
-        "source_candidate_id": source_candidate.id,
-        "source_candidate_version": source_candidate.version,
-    }
-    db.add(source_candidate)
-    db.add(replacement)
-    db.add(task)
-    db.commit()
-    db.refresh(source_candidate)
-    db.refresh(replacement)
-    db.refresh(task)
-    return replacement, task

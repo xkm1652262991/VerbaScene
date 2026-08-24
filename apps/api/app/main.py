@@ -11,18 +11,20 @@ from app.core.errors import register_exception_handlers
 from app.core.logging import configure_logging
 from app.core.openapi import install_openapi_contract
 from app.db import SessionLocal
+from app.platform.tasks.defaults import configure_default_task_runtime
 from app.services.provider_config_service import reload_runtime_provider_configs
-from app.services.script_generation_queue_service import start_script_generation_queue
-from app.services.video_generation_queue_service import start_video_generation_queue
 
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
     with SessionLocal() as db:
         reload_runtime_provider_configs(db)
-    start_script_generation_queue()
-    start_video_generation_queue()
-    yield
+    runtime = configure_default_task_runtime()
+    runtime.start()
+    try:
+        yield
+    finally:
+        runtime.stop(timeout_sec=settings.task_shutdown_timeout_sec)
 
 
 def create_app() -> FastAPI:

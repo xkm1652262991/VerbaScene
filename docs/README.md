@@ -29,6 +29,7 @@
 | [22-ltx23-video-integration.md](22-ltx23-video-integration.md) | LTX-2.3 视频 Adapter 合同与配置 |
 | [24-script-prompt-quality-pipeline.md](24-script-prompt-quality-pipeline.md) | 剧本开发、审稿、定点修订与语义编译 |
 | [25-demo-evidence.md](25-demo-evidence.md) | 可对外陈述的证据、样片清单和验收缺口 |
+| [26-backend-task-runtime.md](26-backend-task-runtime.md) | 统一任务状态、租约、重试、取消与视频批次合同 |
 
 前后端机器可读合同位于 [api/openapi.json](api/openapi.json)。路由或 Schema 变化后，应重新导出并执行合同检查。
 

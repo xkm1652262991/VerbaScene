@@ -1,9 +1,15 @@
 from decimal import Decimal
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Response, UploadFile, status
+from fastapi import APIRouter, Depends, File, Form, Header, HTTPException, Query, Response, UploadFile, status
 from sqlalchemy.orm import Session
 
 from app.db import get_db
+from app.platform.tasks.runtime import get_task_runtime
+from app.production.video_tasks import (
+    create_project_video_batch_task,
+    create_video_candidate_task,
+    create_video_regeneration_task,
+)
 from app.schemas.common import ApiResponse, PageResponse
 from app.schemas.asset import AssetCandidateGenerationResponse, AssetRead, ShotVideoGenerationRequest
 from app.schemas.task import GenerationTaskRead
@@ -21,12 +27,6 @@ from app.services.image_generation_service import (
     generate_single_shot_image_candidate,
     regenerate_image_asset_candidate,
 )
-from app.services.video_generation_service import (
-    create_single_shot_video_candidate_task,
-    generate_shot_video_candidates,
-    regenerate_video_asset_candidate,
-)
-from app.services.video_generation_queue_service import schedule_video_generation_task
 
 router = APIRouter(tags=["assets"])
 
@@ -154,13 +154,23 @@ def generate_project_shot_videos_endpoint(
     _raise_candidate_required("/api/projects/{project_id}/shot-videos/generate-candidates")
 
 
-@router.post("/api/projects/{project_id}/shot-videos/generate-candidates", response_model=ApiResponse[AssetCandidateGenerationResponse])
+@router.post(
+    "/api/projects/{project_id}/shot-videos/generate-candidates",
+    response_model=ApiResponse[GenerationTaskRead],
+    status_code=status.HTTP_202_ACCEPTED,
+)
 def generate_project_shot_video_candidates_endpoint(
     project_id: str,
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
     db: Session = Depends(get_db),
-) -> ApiResponse[AssetCandidateGenerationResponse]:
-    candidates, task = generate_shot_video_candidates(db, project_id)
-    return ApiResponse(data={"candidates": candidates, "task_id": task.id})
+) -> ApiResponse[GenerationTaskRead]:
+    task = create_project_video_batch_task(
+        db,
+        project_id,
+        idempotency_key=idempotency_key,
+    )
+    get_task_runtime().wake()
+    return ApiResponse(data=task)
 
 
 @router.post("/api/shots/{shot_id}/video/generate", deprecated=True)
@@ -173,20 +183,26 @@ def generate_single_shot_video_endpoint(
     _raise_candidate_required("/api/shots/{shot_id}/video/generate-candidate")
 
 
-@router.post("/api/shots/{shot_id}/video/generate-candidate", response_model=ApiResponse[GenerationTaskRead])
+@router.post(
+    "/api/shots/{shot_id}/video/generate-candidate",
+    response_model=ApiResponse[GenerationTaskRead],
+    status_code=status.HTTP_202_ACCEPTED,
+)
 def generate_single_shot_video_candidate_endpoint(
     shot_id: str,
     payload: ShotVideoGenerationRequest,
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
     db: Session = Depends(get_db),
 ) -> ApiResponse[GenerationTaskRead]:
-    task = create_single_shot_video_candidate_task(
+    task = create_video_candidate_task(
         db,
         shot_id,
         duration_mode=payload.duration_mode,
         duration_sec=payload.duration_sec,
         video_prompt=payload.video_prompt,
+        idempotency_key=idempotency_key,
     )
-    schedule_video_generation_task(task.id)
+    get_task_runtime().wake()
     return ApiResponse(data=task)
 
 
@@ -260,13 +276,23 @@ def regenerate_video_asset_endpoint(
     _raise_candidate_required("/api/assets/{asset_id}/regenerate-video-candidate")
 
 
-@router.post("/api/assets/{asset_id}/regenerate-video-candidate", response_model=ApiResponse[AssetCandidateGenerationResponse])
+@router.post(
+    "/api/assets/{asset_id}/regenerate-video-candidate",
+    response_model=ApiResponse[GenerationTaskRead],
+    status_code=status.HTTP_202_ACCEPTED,
+)
 def regenerate_video_asset_candidate_endpoint(
     asset_id: str,
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
     db: Session = Depends(get_db),
-) -> ApiResponse[AssetCandidateGenerationResponse]:
-    candidate, task = regenerate_video_asset_candidate(db, asset_id)
-    return ApiResponse(data={"candidates": [candidate], "task_id": task.id})
+) -> ApiResponse[GenerationTaskRead]:
+    task = create_video_regeneration_task(
+        db,
+        asset_id,
+        idempotency_key=idempotency_key,
+    )
+    get_task_runtime().wake()
+    return ApiResponse(data=task)
 
 
 @router.post("/api/assets/{asset_id}/extract-frame", response_model=ApiResponse[AssetCandidateGenerationResponse])

@@ -1,7 +1,7 @@
 import base64
 import json
 import mimetypes
-import time
+import tempfile
 from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
@@ -21,10 +21,10 @@ from app.providers.types import (
     ProviderStatus,
     ProviderType,
     ProviderUsage,
+    SubmissionState,
 )
 
 
-_TERMINAL_STATUSES = {"succeeded", "failed", "cancelled"}
 _RATIO_DIMENSIONS: dict[str, dict[str, tuple[int, int]]] = {
     "480p": {
         "16:9": (864, 496),
@@ -123,78 +123,36 @@ class Seedance2ApiProvider(ProviderAdapter):
             )
         )
         remote_task_id = fallback_task_id
+        submission_state = SubmissionState.NOT_SUBMITTED
         try:
             self.validate_config()
             params = _generation_params(request)
             references = _reference_descriptors(request)
             payload = _build_payload(
                 request,
-                model=self.model,
+                model=request.model or self.model,
                 params=params,
                 references=references,
             )
+            # From this checkpoint onward a transport/response parsing failure
+            # cannot prove that the remote service did not accept the request.
+            submission_state = SubmissionState.UNKNOWN
             submitted = self._request_json(
                 f"{self.base_url}/contents/generations/tasks",
                 method="POST",
                 payload=payload,
             )
             remote_task_id = _task_id(submitted)
-            final = self._wait_for_task(remote_task_id)
-            status = _provider_status(final)
-            if status != ProviderStatus.SUCCEEDED:
-                error_code, error_message = _task_error(final)
-                return _failed_response(
-                    remote_task_id,
-                    error_code,
-                    error_message,
-                    raw_response={
-                        "model": self.model,
-                        "task": _safe_task_response(final),
-                        "request_contract": _request_contract(
-                            request,
-                            params=params,
-                            references=references,
-                        ),
-                    },
-                    retryable=_retryable_error(error_code, status),
-                    status=status,
-                )
-
-            duration = _result_duration(final, params)
-            video_url = _result_video_url(final)
-            video_bytes, mime_type = self._download_video(video_url)
-            uri = _persist_video_result(
-                request,
-                remote_task_id,
-                video_bytes,
-                mime_type,
-            )
-            width, height = _result_dimensions(final, params)
-            asset = ProviderAsset(
-                asset_type="video",
-                uri=uri,
-                mime_type=mime_type,
-                width=width,
-                height=height,
-                duration_sec=duration,
-                metadata={
-                    "provider_task_id": remote_task_id,
-                    "remote_video_url": video_url,
-                    "native_audio": params.generate_audio,
-                    "resolution": str(final.get("resolution") or params.resolution),
-                    "ratio": str(final.get("ratio") or params.ratio),
-                    "duration_mode": _duration_mode(params.duration),
-                    "reference_count": len(references),
-                },
-            )
+            submission_state = SubmissionState.ACCEPTED
+            provider_status = _provider_status(submitted)
             return ProviderResponse(
-                status=ProviderStatus.SUCCEEDED,
+                status=provider_status,
                 provider_task_id=remote_task_id,
                 execution_mode=ProviderExecutionMode.ASYNC,
-                assets=[asset],
+                poll_after_sec=settings.seedance2_api_poll_interval_sec,
                 raw_response={
-                    "model": self.model,
-                    "task": _safe_task_response(final),
+                    "model": request.model or self.model,
+                    "task": _safe_task_response(submitted),
                     "request_contract": _request_contract(
                         request,
                         params=params,
@@ -218,6 +176,11 @@ class Seedance2ApiProvider(ProviderAdapter):
                 message,
                 raw_response=raw_error,
                 retryable=retryable,
+                submission_state=(
+                    SubmissionState.NOT_SUBMITTED
+                    if isinstance(exc, HTTPError)
+                    else submission_state
+                ),
                 status=(
                     ProviderStatus.TIMEOUT
                     if isinstance(exc, TimeoutError)
@@ -229,6 +192,57 @@ class Seedance2ApiProvider(ProviderAdapter):
         self.validate_config()
         task = self._get_task(provider_task_id)
         return self.normalize_response(task)
+
+    def fetch_result(
+        self,
+        provider_task_id: str,
+        *,
+        request: ProviderRequest | None = None,
+        provider_context: dict | None = None,
+    ) -> ProviderResponse:
+        _ = provider_context
+        self.validate_config()
+        final = self._get_task(provider_task_id)
+        normalized = self.normalize_response(final)
+        if normalized.status != ProviderStatus.SUCCEEDED:
+            return normalized
+        if request is not None:
+            params = _generation_params(request)
+        else:
+            params = _SeedanceParams(
+                duration=int(_response_duration(final)),
+                resolution=str(final.get("resolution") or "480p"),
+                ratio=str(final.get("ratio") or "16:9"),
+                generate_audio=True,
+                watermark=False,
+            )
+        video_url = _result_video_url(final)
+        video_bytes, mime_type = self._download_video(video_url)
+        uri = _temporary_video_result(provider_task_id, video_bytes, mime_type)
+        width, height = _result_dimensions(final, params)
+        return ProviderResponse(
+            status=ProviderStatus.SUCCEEDED,
+            provider_task_id=provider_task_id,
+            execution_mode=ProviderExecutionMode.ASYNC,
+            assets=[
+                ProviderAsset(
+                    asset_type="video",
+                    uri=uri,
+                    mime_type=mime_type,
+                    width=width,
+                    height=height,
+                    duration_sec=_result_duration(final, params),
+                    metadata={
+                        "provider_task_id": provider_task_id,
+                        "remote_video_url": video_url,
+                        "temporary_file": True,
+                        "native_audio": params.generate_audio,
+                    },
+                )
+            ],
+            raw_response=_safe_task_response(final),
+            usage=ProviderUsage(cost=Decimal("0"), unit="CNY"),
+        )
 
     def cancel(self, provider_task_id: str) -> None:
         self.validate_config()
@@ -274,6 +288,7 @@ class Seedance2ApiProvider(ProviderAdapter):
                 error_code=code,
                 error_message=message,
                 is_retryable=_retryable_error(code, status),
+                submission_state=SubmissionState.ACCEPTED,
                 raw_error=_safe_task_response(raw_response),
             )
         return ProviderResponse(
@@ -290,17 +305,6 @@ class Seedance2ApiProvider(ProviderAdapter):
             usage=ProviderUsage(cost=Decimal("0"), unit="CNY"),
             error=error,
         )
-
-    def _wait_for_task(self, task_id: str) -> dict:
-        deadline = time.monotonic() + settings.seedance2_api_job_timeout_sec
-        while True:
-            task = self._get_task(task_id)
-            status = str(task.get("status") or "").strip().lower()
-            if status in _TERMINAL_STATUSES:
-                return task
-            if time.monotonic() >= deadline:
-                raise TimeoutError(f"Seedance 2.0 task timed out: {task_id}")
-            time.sleep(settings.seedance2_api_poll_interval_sec)
 
     def _get_task(self, task_id: str) -> dict:
         return self._request_json(
@@ -671,28 +675,19 @@ def _result_dimensions(
     return _RATIO_DIMENSIONS.get(resolution, {}).get(ratio, (0, 0))
 
 
-def _persist_video_result(
-    request: ProviderRequest,
+def _temporary_video_result(
     task_id: str,
     video_bytes: bytes,
     mime_type: str,
 ) -> str:
     suffix = mimetypes.guess_extension(mime_type) or ".mp4"
-    storage_dir = (
-        Path(settings.storage_root).resolve()
-        / "projects"
-        / request.project_id
-        / "provider-results"
-        / "seedance2"
-    )
-    storage_dir.mkdir(parents=True, exist_ok=True)
-    filename = f"{task_id}{suffix}"
-    path = storage_dir / filename
-    path.write_bytes(video_bytes)
-    return (
-        f"{settings.public_storage_base_url}/projects/{request.project_id}"
-        f"/provider-results/seedance2/{filename}"
-    )
+    with tempfile.NamedTemporaryFile(
+        prefix=f"verbascene-seedance2-{task_id}-",
+        suffix=suffix,
+        delete=False,
+    ) as output:
+        output.write(video_bytes)
+        return output.name
 
 
 def _safe_task_response(payload: dict) -> dict:
@@ -725,6 +720,7 @@ def _failed_response(
     *,
     raw_response: dict,
     retryable: bool,
+    submission_state: SubmissionState = SubmissionState.NOT_SUBMITTED,
     status: ProviderStatus,
 ) -> ProviderResponse:
     return ProviderResponse(
@@ -736,6 +732,7 @@ def _failed_response(
             error_code=code,
             error_message=message,
             is_retryable=retryable,
+            submission_state=submission_state,
             raw_error=raw_response,
         ),
         usage=ProviderUsage(cost=Decimal("0"), unit="CNY"),

@@ -1,6 +1,7 @@
 import base64
 import json
 import mimetypes
+import tempfile
 import time
 from dataclasses import dataclass
 from decimal import Decimal
@@ -16,18 +17,20 @@ from app.providers.base import ProviderAdapter
 from app.providers.types import (
     ProviderAsset,
     ProviderError,
+    ProviderExecutionMode,
     ProviderRequest,
     ProviderResponse,
     ProviderStatus,
     ProviderType,
     ProviderUsage,
+    SubmissionState,
 )
 
 
 class Wan2I2VApiProvider(ProviderAdapter):
     name = "wan2_i2v_api"
     type = ProviderType.VIDEO
-    capabilities = ["image_to_video", "async_api", "poll", "polling", "wan2_i2v"]
+    capabilities = ["image_to_video", "async_api", "poll", "polling", "cancel", "wan2_i2v"]
     reference_images = True
     max_duration_sec = 5
     supported_resolutions = ["1280x720"]
@@ -46,14 +49,19 @@ class Wan2I2VApiProvider(ProviderAdapter):
 
     def submit(self, request: ProviderRequest) -> ProviderResponse:
         provider_task_id = str(uuid5(NAMESPACE_URL, f"{request.project_id}:{request.task_id}:wan2-i2v"))
+        submission_state = SubmissionState.NOT_SUBMITTED
         try:
             self.validate_config()
             image_input = _primary_image(request)
+            # Submission helpers perform the network POST. Once entered, only
+            # an explicit HTTP rejection proves the request was not accepted.
+            submission_state = SubmissionState.UNKNOWN
             if self.protocol == "persistent":
                 job = self._submit_persistent_job(request, client_job_id=provider_task_id, image_input=image_input)
                 job_id = _job_id(job)
-                final_status = {"status": "succeeded", **job}
-                video_bytes, content_type = self._download_persistent_result(job)
+                provider_task_id = job_id
+                submission_state = SubmissionState.ACCEPTED
+                provider_status = ProviderStatus.SUCCEEDED
             else:
                 job = self._submit_job(
                     request,
@@ -61,16 +69,9 @@ class Wan2I2VApiProvider(ProviderAdapter):
                     image_input=image_input,
                 )
                 job_id = _job_id(job)
-                final_status = self._poll_job(job_id)
-                if str(final_status.get("status")) != "succeeded":
-                    return _failed_response(
-                        provider_task_id,
-                        "wan2_i2v_job_failed",
-                        str(final_status.get("error") or final_status.get("message") or "Wan2 I2V job failed"),
-                        raw_response={"job": job, "final_status": final_status},
-                        retryable=False,
-                    )
-                video_bytes, content_type = self._download_result(job_id)
+                provider_task_id = job_id
+                submission_state = SubmissionState.ACCEPTED
+                provider_status = _provider_status(job)
         except (HTTPError, URLError, TimeoutError, OSError, ValueError, json.JSONDecodeError) as exc:
             return _failed_response(
                 provider_task_id,
@@ -78,10 +79,90 @@ class Wan2I2VApiProvider(ProviderAdapter):
                 _error_message(exc),
                 raw_response=_raw_http_error(exc),
                 retryable=True,
+                submission_state=(
+                    SubmissionState.NOT_SUBMITTED
+                    if isinstance(exc, HTTPError)
+                    else submission_state
+                ),
             )
+        return ProviderResponse(
+            status=provider_status,
+            provider_task_id=provider_task_id,
+            execution_mode=ProviderExecutionMode.ASYNC,
+            poll_after_sec=(
+                settings.wan_i2v_api_poll_interval_sec
+                if provider_status in {ProviderStatus.QUEUED, ProviderStatus.RUNNING}
+                else None
+            ),
+            raw_response={
+                "model": self.model,
+                "wan_job_id": job_id,
+                "job": job,
+                "protocol": self.protocol,
+                "result_variant": settings.wan_i2v_api_result_variant,
+            },
+            usage=ProviderUsage(cost=Decimal("0"), unit="USD"),
+        )
 
+    def poll(self, provider_task_id: str) -> ProviderResponse:
+        self.validate_config()
+        if self.protocol == "persistent":
+            raise NotImplementedError("Wan persistent protocol has no polling endpoint")
+        status_payload = _data(self._get_job(provider_task_id))
+        provider_status = _provider_status(status_payload)
+        error = None
+        if provider_status in {ProviderStatus.FAILED, ProviderStatus.CANCELLED, ProviderStatus.TIMEOUT}:
+            error = ProviderError(
+                error_code="wan2_i2v_job_failed",
+                error_message=str(
+                    status_payload.get("error")
+                    or status_payload.get("message")
+                    or "Wan2 I2V job failed"
+                ),
+                is_retryable=False,
+                submission_state=SubmissionState.ACCEPTED,
+                raw_error=status_payload,
+            )
+        return ProviderResponse(
+            status=provider_status,
+            provider_task_id=provider_task_id,
+            execution_mode=ProviderExecutionMode.ASYNC,
+            poll_after_sec=(
+                settings.wan_i2v_api_poll_interval_sec
+                if provider_status in {ProviderStatus.QUEUED, ProviderStatus.RUNNING}
+                else None
+            ),
+            raw_response=status_payload,
+            error=error,
+        )
+
+    def fetch_result(
+        self,
+        provider_task_id: str,
+        *,
+        request: ProviderRequest | None = None,
+        provider_context: dict | None = None,
+    ) -> ProviderResponse:
+        if request is None:
+            raise ValueError("Wan2 fetch_result requires the original request snapshot")
+        if self.protocol == "persistent":
+            job = (
+                provider_context.get("job")
+                if isinstance(provider_context, dict) and isinstance(provider_context.get("job"), dict)
+                else None
+            )
+            if job is None:
+                raise ValueError("Wan persistent result context is missing")
+            final_status = {"status": "succeeded", **job}
+            video_bytes, content_type = self._download_persistent_result(job)
+        else:
+            polled = self.poll(provider_task_id)
+            if polled.status != ProviderStatus.SUCCEEDED:
+                return polled
+            final_status = polled.raw_response
+            video_bytes, content_type = self._download_result(provider_task_id)
         mime_type = content_type.split(";", 1)[0] or "video/mp4"
-        uri = _persist_video_result(request, job_id, video_bytes, mime_type)
+        uri = _temporary_video_result(provider_task_id, video_bytes, mime_type)
         duration = Decimal(
             str(
                 final_status.get("duration_sec")
@@ -90,29 +171,43 @@ class Wan2I2VApiProvider(ProviderAdapter):
             )
         ).quantize(Decimal("0.001"))
         width, height = _result_dimensions(request, final_status)
-        asset = ProviderAsset(
-            asset_type="video",
-            uri=uri,
-            mime_type=mime_type,
-            width=width,
-            height=height,
-            duration_sec=duration,
-            metadata={"provider_task_id": provider_task_id, "wan_job_id": job_id},
-        )
         return ProviderResponse(
             status=ProviderStatus.SUCCEEDED,
             provider_task_id=provider_task_id,
-            assets=[asset],
-            raw_response={
-                "model": self.model,
-                "wan_job_id": job_id,
-                "job": job,
-                "final_status": final_status,
-                "result_variant": settings.wan_i2v_api_result_variant,
-                "content_type": mime_type,
-            },
+            execution_mode=ProviderExecutionMode.ASYNC,
+            assets=[
+                ProviderAsset(
+                    asset_type="video",
+                    uri=uri,
+                    mime_type=mime_type,
+                    width=width,
+                    height=height,
+                    duration_sec=duration,
+                    metadata={
+                        "provider_task_id": provider_task_id,
+                        "wan_job_id": provider_task_id,
+                        "temporary_file": True,
+                    },
+                )
+            ],
+            raw_response=final_status,
             usage=ProviderUsage(cost=Decimal("0"), unit="USD"),
         )
+
+    def cancel(self, provider_task_id: str) -> None:
+        self.validate_config()
+        if self.protocol == "persistent":
+            raise NotImplementedError("Wan persistent protocol does not support cancellation")
+        path = f"/v1/jobs/{provider_task_id}" if self.protocol == "local" else f"/v1/i2v/jobs/{provider_task_id}"
+        with urlopen(
+            Request(
+                f"{self.base_url}{path}",
+                headers=self._auth_headers(),
+                method="DELETE",
+            ),
+            timeout=settings.wan_i2v_api_timeout_sec,
+        ):
+            return None
 
     def _submit_job(
         self,
@@ -502,6 +597,19 @@ def _data(payload: dict) -> dict:
     return data if isinstance(data, dict) else payload
 
 
+def _provider_status(payload: dict) -> ProviderStatus:
+    value = str(_data(payload).get("status") or "").strip().lower()
+    if value in {"queued", "pending", "created"}:
+        return ProviderStatus.QUEUED
+    if value in {"succeeded", "success", "completed", "complete", "done", "finished"}:
+        return ProviderStatus.SUCCEEDED
+    if value in {"failed", "error"}:
+        return ProviderStatus.FAILED
+    if value in {"cancelled", "canceled", "aborted"}:
+        return ProviderStatus.CANCELLED
+    return ProviderStatus.RUNNING
+
+
 def _duration_from_params(request: ProviderRequest) -> float:
     frames = int(request.params.get("frames", settings.wan_i2v_frames))
     fps = int(request.params.get("fps", settings.wan_i2v_fps))
@@ -566,14 +674,15 @@ def _api_protocol() -> str:
     return value
 
 
-def _persist_video_result(request: ProviderRequest, job_id: str, video_bytes: bytes, mime_type: str) -> str:
+def _temporary_video_result(job_id: str, video_bytes: bytes, mime_type: str) -> str:
     suffix = mimetypes.guess_extension(mime_type) or ".mp4"
-    storage_dir = Path(settings.storage_root).resolve() / "projects" / request.project_id / "provider-results" / "wan2-i2v"
-    storage_dir.mkdir(parents=True, exist_ok=True)
-    filename = f"{job_id}{suffix}"
-    path = storage_dir / filename
-    path.write_bytes(video_bytes)
-    return f"{settings.public_storage_base_url}/projects/{request.project_id}/provider-results/wan2-i2v/{filename}"
+    with tempfile.NamedTemporaryFile(
+        prefix=f"verbascene-wan-{job_id}-",
+        suffix=suffix,
+        delete=False,
+    ) as output:
+        output.write(video_bytes)
+        return output.name
 
 
 def _form_bool(value: object) -> str:
@@ -595,12 +704,20 @@ def _failed_response(
     *,
     raw_response: dict,
     retryable: bool,
+    submission_state: SubmissionState = SubmissionState.NOT_SUBMITTED,
 ) -> ProviderResponse:
     return ProviderResponse(
         status=ProviderStatus.FAILED,
         provider_task_id=provider_task_id,
+        execution_mode=ProviderExecutionMode.ASYNC,
         raw_response=raw_response,
-        error=ProviderError(error_code=code, error_message=message, is_retryable=retryable, raw_error=raw_response),
+        error=ProviderError(
+            error_code=code,
+            error_message=message,
+            is_retryable=retryable,
+            submission_state=submission_state,
+            raw_error=raw_response,
+        ),
     )
 
 

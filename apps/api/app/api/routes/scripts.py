@@ -1,13 +1,13 @@
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, Header, HTTPException, status
 from sqlalchemy.orm import Session
 
 from app.db import get_db
 from app.schemas.common import ApiResponse
 from app.schemas.script import ScriptRead, ScriptUpdate
 from app.schemas.task import GenerationTaskRead
-from app.services.script_generation_queue_service import schedule_script_generation_task
+from app.platform.tasks.runtime import get_task_runtime
+from app.scripts.task_creation import create_script_generation_task
 from app.services.script_service import (
-    create_script_generation_task,
     get_latest_script,
     update_script,
 )
@@ -22,10 +22,11 @@ router = APIRouter(tags=["scripts"])
 )
 def generate_project_script_endpoint(
     project_id: str,
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
     db: Session = Depends(get_db),
 ) -> ApiResponse[GenerationTaskRead]:
-    task = create_script_generation_task(db, project_id)
-    schedule_script_generation_task(task.id)
+    task = create_script_generation_task(db, project_id, idempotency_key=idempotency_key)
+    get_task_runtime().wake()
     return ApiResponse(data=task)
 
 

@@ -2,6 +2,10 @@
 
 `openapi.json` is the checked-in frontend/backend contract for the VerbaScene API.
 
+The current contract intentionally contains breaking backend task changes. The
+web application is frozen for this upgrade and requires a separate follow-up
+adaptation before its consumer-side check is expected to pass again.
+
 Whenever backend routes, request schemas, response schemas, error payloads, or pagination models change, regenerate the contract before updating frontend code.
 
 ```bash

@@ -1,0 +1,1 @@
+"""Asset-library application module."""

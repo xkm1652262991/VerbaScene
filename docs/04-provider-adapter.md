@@ -37,6 +37,18 @@
 
 上游变化不会自动覆盖人工编辑稿。只有用户点击“重新编译 Prompt”才写入新的最终 Prompt。
 
+## 异步视频合同
+
+异步视频 Adapter 必须拆分为 `submit / poll / cancel / fetch_result`。
+`submit()` 只完成一次远程提交并立即返回任务 ID，不得在 Adapter 内部循环轮询。
+Worker 持久化远程 ID 后进入 `waiting_provider`，后续领取只能调用 `poll()`。
+
+`ProviderError.submission_state` 为 `not_submitted | accepted | unknown`。只有明确
+`not_submitted` 且可重试的错误允许最多一次自动重试；`unknown` 必须人工处理。
+
+Provider 使用自身认证下载结果并返回临时文件。应用层通过 `MediaStore` 写入
+`storage/projects/...`；Provider 不直接写项目最终目录。
+
 ## Seedance 2.0 方舟 Adapter
 
 Provider 名称为 `seedance2_api`，默认模型为
@@ -77,9 +89,9 @@ Prompt 必须使用与 `content` 完全一致的“图片N”指代，不能把�
 Adapter 转为 Data URL 后提交；本机视频和音频不会被隐式上传，必须先具有方舟
 可访问的公网 URL 或 `asset://` 地址，否则在提交前明确失败。
 
-Adapter 在应用的视频生成队列线程内提交远端异步任务并轮询到终态。成功后立即
-下载短效 `content.video_url`，转存到项目存储，再创建候选版本。失败状态保留
-方舟错误码、任务 ID 和可重试属性，但不自动再次提交，避免重复计费。
+Adapter 的 `submit()` 创建方舟任务后立即返回；Worker 分次调用 `poll()`。终态后
+`fetch_result()` 下载短效 `content.video_url` 到临时文件，应用层再经
+`LocalMediaStore` 创建候选版本。失败保留方舟错误码、远端任务 ID 和提交状态。
 
 智能时长不是省略时长参数，而是 Seedance 专属的 `duration=-1` 合同。业务层使用
 `duration_mode=provider_auto | fixed` 表达意图，不得把 `-1` 当成所有视频 Provider

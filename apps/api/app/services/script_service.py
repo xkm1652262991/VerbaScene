@@ -14,8 +14,10 @@ from app.agents.script_screenplay import (
 )
 from app.core.config import settings
 from app.models import Chapter, GenerationTask, Project, Script
+from app.platform.tasks.repository import TaskConflictError, TaskRepository
+from app.platform.tasks.types import TaskExecutionError
 from app.providers.defaults import provider_registry
-from app.providers.types import ProviderType
+from app.providers.types import ProviderType, SubmissionState
 from app.schemas.script import ScriptUpdate
 from app.services.agent_config_service import resolve_agent_config
 from app.services.dialogue_service import synchronize_script_dialogues
@@ -64,21 +66,24 @@ def get_script_or_404(db: Session, script_id: str) -> Script:
     return script
 
 
-def create_script_generation_task(db: Session, project_id: str) -> GenerationTask:
+def create_script_generation_task(
+    db: Session,
+    project_id: str,
+    *,
+    idempotency_key: str | None = None,
+) -> GenerationTask:
     project = get_project_or_404(db, project_id)
     chapter = get_primary_chapter_or_404(project)
-    active = db.scalar(
-        select(GenerationTask)
-        .where(GenerationTask.project_id == project_id)
-        .where(GenerationTask.task_type == SCRIPT_GENERATION_TASK_TYPE)
-        .where(GenerationTask.status.in_(("queued", "running")))
-        .order_by(GenerationTask.created_at.desc())
-    )
-    if active is not None:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail=f"该项目已有剧本任务正在执行：{active.id}",
+    normalized_idempotency_key = (idempotency_key or "").strip()
+    if normalized_idempotency_key:
+        existing = db.scalar(
+            select(GenerationTask)
+            .where(GenerationTask.project_id == project_id)
+            .where(GenerationTask.task_type == SCRIPT_GENERATION_TASK_TYPE)
+            .where(GenerationTask.idempotency_key == normalized_idempotency_key)
         )
+        if existing is not None:
+            return existing
 
     agent_config = resolve_agent_config(
         db,
@@ -99,35 +104,42 @@ def create_script_generation_task(db: Session, project_id: str) -> GenerationTas
     temperatures = _pipeline_temperatures(agent_config)
     temperatures["script_review"] = _phase_temperature(review_config, "script_review", 0.2)
     source = _script_generation_input_from_records(project, chapter)
-    task = GenerationTask(
-        project_id=project_id,
-        task_type=SCRIPT_GENERATION_TASK_TYPE,
-        provider=provider.name,
-        model=model,
-        input_payload={
-            "pipeline_version": SCRIPT_QUALITY_PIPELINE_VERSION,
-            "script_input": source.to_payload(),
-            "system_prompt": script_pipeline_system_prompt(agent_config.system_prompt),
-            "review_runtime": {
-                "provider": review_provider.name,
-                "model": review_model,
-                "system_prompt": script_pipeline_system_prompt(review_config.system_prompt),
-            },
-            "temperatures": temperatures,
-        },
-        status="queued",
-        progress=0,
-        progress_label="等待剧本生成",
-        raw_response={
-            "checkpoint": {
+    try:
+        creation = TaskRepository().create(
+            db,
+            project_id=project_id,
+            task_type=SCRIPT_GENERATION_TASK_TYPE,
+            resource_key=f"project:{project_id}:script",
+            idempotency_key=normalized_idempotency_key or None,
+            provider=provider.name,
+            model=model,
+            input_payload={
                 "pipeline_version": SCRIPT_QUALITY_PIPELINE_VERSION,
-                "responses": {},
-                "pipeline_trace": {"phases": [], "fallbacks": []},
-            }
-        },
-    )
-    db.add(task)
+                "script_input": source.to_payload(),
+                "system_prompt": script_pipeline_system_prompt(agent_config.system_prompt),
+                "review_runtime": {
+                    "provider": review_provider.name,
+                    "model": review_model,
+                    "system_prompt": script_pipeline_system_prompt(review_config.system_prompt),
+                },
+                "temperatures": temperatures,
+            },
+            progress_label="等待剧本生成",
+            raw_response={
+                "checkpoint": {
+                    "pipeline_version": SCRIPT_QUALITY_PIPELINE_VERSION,
+                    "responses": {},
+                    "pipeline_trace": {"phases": [], "fallbacks": []},
+                }
+            },
+        )
+    except TaskConflictError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={"message": "该项目已有剧本任务正在执行", "task_id": exc.task_id},
+        ) from exc
     db.commit()
+    task = creation.task
     db.refresh(task)
     return task
 
@@ -169,9 +181,21 @@ def execute_script_generation_task(db: Session, task_id: str) -> tuple[Script, G
     checkpoint = raw_response.get("checkpoint") if isinstance(raw_response.get("checkpoint"), dict) else {}
 
     def persist_checkpoint(value: dict, label: str, progress: int) -> None:
+        previous_raw_response = dict(task.raw_response or {})
+        db.refresh(task)
+        if task.cancel_requested_at is not None or task.status == "cancelling":
+            raise TaskExecutionError("task_cancelled", "剧本任务已请求取消")
         task.raw_response = {"checkpoint": value}
         task.provider_task_id = _last_provider_task_id(value)
         update_task_progress(db, task, label, progress)
+        if task.cancel_requested_at is not None or task.status == "cancelling":
+            if isinstance(value.get("inflight_phase"), dict):
+                # Cancellation won the race before submit(). Do not leave an
+                # uncertainty marker for a request that was never sent.
+                task.raw_response = previous_raw_response
+                db.add(task)
+                db.commit()
+            raise TaskExecutionError("task_cancelled", "剧本任务已请求取消")
 
     try:
         pipeline_result = run_script_pipeline(
@@ -190,25 +214,60 @@ def execute_script_generation_task(db: Session, task_id: str) -> tuple[Script, G
             on_checkpoint=persist_checkpoint,
         )
     except ScriptPipelineFailure as exc:
-        failure_raw_response = {"checkpoint": exc.checkpoint}
+        failure_checkpoint = exc.checkpoint
+        if (
+            exc.retryable
+            and exc.submission_state == SubmissionState.NOT_SUBMITTED
+            and task.retry_count < task.max_retries
+        ):
+            failure_checkpoint = _script_retry_checkpoint(exc)
+            task.raw_response = {"checkpoint": failure_checkpoint}
+            task.provider_task_id = _last_provider_task_id(failure_checkpoint)
+            task.progress_label = "Provider 未受理，等待自动重试"
+            db.add(task)
+            db.commit()
+            raise TaskExecutionError(
+                code=exc.code,
+                message=exc.message,
+                retryable=True,
+                submission_state=SubmissionState.NOT_SUBMITTED,
+                raw_response={"checkpoint": failure_checkpoint},
+            ) from exc
+
+        failure_code = (
+            "provider_submission_uncertain"
+            if exc.submission_state == SubmissionState.UNKNOWN
+            else exc.code
+        )
+        failure_raw_response = {
+            "checkpoint": failure_checkpoint,
+            "failure_phase": exc.phase,
+            "submission_state": exc.submission_state.value,
+        }
         mark_task_failed(
             db,
             task,
-            code=exc.code,
+            code=failure_code,
             message=exc.message,
             raw_response=failure_raw_response,
             provider_task_id=exc.provider_task_id,
             failure_reason=normalize_failure_reason(
-                code=exc.code,
+                code=failure_code,
                 message=exc.message,
                 raw_response=failure_raw_response,
                 stage="script",
                 task_type=task.task_type,
                 provider=task.provider,
-                retryable=False,
+                retryable=exc.retryable,
             ),
         )
-        mark_stage_failed(db, project.id, "script", summary=exc.message, error_code=exc.code)
+        mark_stage_failed(
+            db,
+            project.id,
+            "script",
+            summary=exc.message,
+            error_code=failure_code,
+        )
         db.add(task)
         db.commit()
         raise
@@ -417,3 +476,19 @@ def _last_provider_task_id(checkpoint: dict) -> str | None:
         if isinstance(item, dict) and item.get("provider_task_id"):
             return str(item["provider_task_id"])
     return None
+
+
+def _script_retry_checkpoint(exc: ScriptPipelineFailure) -> dict:
+    checkpoint = dict(exc.checkpoint or {})
+    responses = dict(checkpoint.get("responses") or {})
+    responses.pop(exc.phase, None)
+    checkpoint["responses"] = responses
+    checkpoint.pop("inflight_phase", None)
+    trace = dict(checkpoint.get("pipeline_trace") or {})
+    trace["phases"] = [
+        item
+        for item in trace.get("phases") or []
+        if not isinstance(item, dict) or item.get("phase") != exc.phase
+    ]
+    checkpoint["pipeline_trace"] = trace
+    return checkpoint

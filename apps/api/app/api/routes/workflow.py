@@ -2,6 +2,7 @@ from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 
 from app.db import get_db
+from app.platform.tasks.runtime import get_task_runtime
 from app.schemas.common import ApiResponse, PageResponse
 from app.schemas.workflow import ProjectStageRunRead
 from app.services.stage_run_service import cancel_stage_run, list_project_stage_runs_page
@@ -26,4 +27,6 @@ def cancel_project_stage_run_endpoint(
     run_id: str,
     db: Session = Depends(get_db),
 ) -> ApiResponse[ProjectStageRunRead]:
-    return ApiResponse(data=cancel_stage_run(db, run_id))
+    run = cancel_stage_run(db, run_id)
+    get_task_runtime().wake()
+    return ApiResponse(data=run)

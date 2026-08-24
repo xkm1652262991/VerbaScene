@@ -25,6 +25,7 @@ from app.models import (
     ShotFrameImage,
     ShotFramePrompt,
 )
+from app.platform.tasks.types import ACTIVE_TASK_STATUSES
 from app.schemas.project import (
     DEFAULT_CREATIVE_SETTINGS,
     ChapterUpsert,
@@ -128,7 +129,7 @@ def get_project_deletion_preview(db: Session, project_id: str) -> dict:
     active_task_count = db.scalar(
         select(func.count(GenerationTask.id))
         .where(GenerationTask.project_id == project_id)
-        .where(GenerationTask.status.in_(("queued", "running")))
+        .where(GenerationTask.status.in_(tuple(ACTIVE_TASK_STATUSES)))
     ) or 0
     active_stage_run_count = db.scalar(
         select(func.count(ProjectStageRun.id))
@@ -138,7 +139,7 @@ def get_project_deletion_preview(db: Session, project_id: str) -> dict:
     storage_summary = _project_storage_summary(project_id)
     blocker_reasons: list[str] = []
     if active_task_count:
-        blocker_reasons.append(f"仍有 {active_task_count} 个生成任务处于排队或运行状态")
+        blocker_reasons.append(f"仍有 {active_task_count} 个生成任务处于活动状态")
     if active_stage_run_count:
         blocker_reasons.append(f"仍有 {active_stage_run_count} 个阶段运行未结束")
 

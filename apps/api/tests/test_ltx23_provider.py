@@ -62,8 +62,8 @@ class LTX23ProviderContractTests(unittest.TestCase):
             patch.object(settings, "public_storage_base_url", "http://api.test/storage"),
             patch("app.providers.ltx23.urlopen", fake_urlopen),
         ):
-            response = LTX23ApiProvider().submit(
-                ProviderRequest(
+            provider = LTX23ApiProvider()
+            request = ProviderRequest(
                     project_id="project-id",
                     task_id="task-id",
                     model="LTX-2.3",
@@ -80,17 +80,14 @@ class LTX23ProviderContractTests(unittest.TestCase):
                         "seed": 42,
                     },
                 )
-            )
-
-            result_path = (
-                Path(temp_dir)
-                / "projects"
-                / "project-id"
-                / "provider-results"
-                / "ltx23"
-                / "ltx-job-image.mp4"
-            )
+            submitted = provider.submit(request)
+            self.assertEqual(submitted.status, ProviderStatus.QUEUED)
+            polled = provider.poll(submitted.provider_task_id)
+            self.assertEqual(polled.status, ProviderStatus.SUCCEEDED)
+            response = provider.fetch_result(submitted.provider_task_id, request=request)
+            result_path = Path(response.assets[0].uri)
             self.assertEqual(result_path.read_bytes(), b"mp4-result")
+            result_path.unlink()
 
         body = captured["submit_body"]
         self.assertEqual(
@@ -109,7 +106,7 @@ class LTX23ProviderContractTests(unittest.TestCase):
         self.assertEqual(response.status, ProviderStatus.SUCCEEDED)
         self.assertEqual(response.assets[0].width, 1024)
         self.assertEqual(response.assets[0].height, 576)
-        self.assertEqual(response.raw_response["generation_mode"], "image_to_video")
+        self.assertEqual(submitted.raw_response["generation_mode"], "image_to_video")
 
     def test_request_without_reference_uses_text_endpoint(self):
         captured: dict[str, object] = {}
@@ -138,8 +135,8 @@ class LTX23ProviderContractTests(unittest.TestCase):
             patch.object(settings, "public_storage_base_url", "http://api.test/storage"),
             patch("app.providers.ltx23.urlopen", fake_urlopen),
         ):
-            response = LTX23ApiProvider().submit(
-                ProviderRequest(
+            provider = LTX23ApiProvider()
+            request = ProviderRequest(
                     project_id="project-id",
                     task_id="text-task",
                     model="LTX-2.3",
@@ -152,7 +149,10 @@ class LTX23ProviderContractTests(unittest.TestCase):
                         "guidance": 1,
                     },
                 )
-            )
+            submitted = provider.submit(request)
+            self.assertEqual(submitted.status, ProviderStatus.QUEUED)
+            response = provider.fetch_result(submitted.provider_task_id, request=request)
+            Path(response.assets[0].uri).unlink()
 
         payload = captured["payload"]
         self.assertEqual(payload["prompt"], "A frog waves from a lily pad.")
@@ -162,7 +162,7 @@ class LTX23ProviderContractTests(unittest.TestCase):
         self.assertIn("client_job_id", payload)
         self.assertEqual(response.status, ProviderStatus.SUCCEEDED)
         self.assertEqual(response.assets[0].mime_type, "video/mp4")
-        self.assertEqual(response.raw_response["generation_mode"], "text_to_video")
+        self.assertEqual(submitted.raw_response["generation_mode"], "text_to_video")
 
 
 if __name__ == "__main__":

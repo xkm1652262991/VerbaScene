@@ -7,18 +7,19 @@
 ```mermaid
 flowchart LR
   WEB["React 工作台"] --> API["FastAPI"]
-  API --> SERVICES["领域服务"]
+  API --> SERVICES["scripts / assets / production / exports"]
   SERVICES --> DB["SQLite / PostgreSQL"]
-  SERVICES --> STORAGE["本地媒体存储"]
-  SERVICES --> SCRIPTQ["剧本线程队列"]
-  SERVICES --> VIDEOQ["单镜头视频线程队列"]
-  SCRIPTQ --> LLM["LLM Adapter"]
-  VIDEOQ --> VIDEO["Video Adapter"]
+  SERVICES --> STORAGE["LocalMediaStore"]
+  SERVICES --> TASKS["platform/tasks 租约运行时"]
+  TASKS --> LLM["LLM Adapter"]
+  TASKS --> VIDEO["Video Adapter"]
   SERVICES --> IMAGE["Image Adapter"]
   SERVICES --> FFMPEG["FFmpeg / ffprobe"]
 ```
 
-当前后端是模块化单体。SQLite、本地存储和进程内队列支持零基础设施单机运行；PostgreSQL 是共享数据库选项，但任务队列仍不是分布式的。
+当前后端是模块化单体。SQLite、本地存储和线程 Worker 支持零基础设施单机运行。
+`GenerationTask` 是唯一任务真相源，进程内事件只用于唤醒；PostgreSQL 可作为数据库选项，
+但本轮不宣称多 API 实例已生产就绪。
 
 ## 2. 工作区与领域对象
 
@@ -56,18 +57,28 @@ flowchart LR
 
 ## 4. 任务执行
 
-### 剧本队列
+### 统一任务合同
 
-剧本生成创建持久化 `GenerationTask`，随后进入单个进程内工作线程。每次成功 LLM 调用后保存检查点；服务重启时，运行中任务会退回 `queued` 并从检查点继续。
+`queued / running / waiting_provider / waiting_children / cancelling` 为活动状态，
+`succeeded / failed / cancelled` 为终态。Worker 通过条件更新原子领取任务，
+并写入 `lease_owner / lease_expires_at / heartbeat_at`。服务只恢复租约过期的任务。
 
-### 视频队列
+`active_dedupe_key` 在数据库级阻止同一项目剧本或同一镜头视频重复提交；终态时清空。
+`Idempotency-Key` 按项目和任务类型返回原任务。剧本并发固定为 1，视频并发最高为 2。
 
-单镜头视频任务进入进程内线程队列，并按配置限制到最多两个工作线程。服务重启时，已在外部执行的任务会标记为中断，排队任务会重新调度。
+### 剧本与视频恢复
+
+剧本每个 Provider 调用前先持久化提交检查点，返回后持久化响应。重启可以跳过已成功阶段；
+若中断发生在提交与响应落库之间，任务以 `provider_submission_uncertain` 失败，不重提。
+
+视频任务在创建时冻结 Prompt、引用资产和参数。异步 Adapter 拆为
+`submit / poll / cancel / fetch_result`；首次提交后立即保存远程任务 ID，重启后只轮询。
+项目批量生成使用一个父任务和每镜头一个子任务，批次创建与冲突检查是原子的。
 
 ### 当前限制
 
-- 队列内存状态不在多个 API 实例间共享。
-- Redis 当前不是任务队列。
+- 本地 Worker 仍以单 API 进程为部署边界。
+- Redis 当前不是任务队列或真相源。
 - 没有 Celery 或 LangGraph worker。
 - 运行中 Provider 请求不保证能够立即取消。
 - 图片批量生成和 FFmpeg 导出仍可能同步占用 API 进程。
@@ -88,8 +99,9 @@ flowchart LR
 ## 6. 持久化与媒体
 
 - 默认结构化数据：`storage/local/content.sqlite3`。
-- 默认媒体：`storage/projects/{project_id}/...`。
-- SQLite 启动时执行本地版本升级与必要备份。
+- 默认媒体：`storage/projects/{project_id}/...`，由 `LocalMediaStore` 实现。
+- Provider 只将带认证的结果下载到临时文件，应用层通过 `MediaStore` 写入项目目录。
+- SQLite 启动时执行本地版本升级，任务结构变更前自动备份。
 - PostgreSQL 使用 Alembic 迁移，不能把同一迁移历史直接应用到本地 SQLite。
 - `/storage` 当前由 FastAPI 静态挂载，尚无鉴权或细粒度访问控制。
 

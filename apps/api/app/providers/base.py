@@ -32,6 +32,17 @@ class ProviderAdapter(ABC):
     def poll(self, provider_task_id: str) -> ProviderResponse:
         raise NotImplementedError("Provider does not support polling")
 
+    def fetch_result(
+        self,
+        provider_task_id: str,
+        *,
+        request: ProviderRequest | None = None,
+        provider_context: dict | None = None,
+    ) -> ProviderResponse:
+        """Fetch a terminal result into provider-owned temporary storage."""
+        _ = (request, provider_context)
+        return self.poll(provider_task_id)
+
     def supports_polling(self) -> bool:
         return "poll" in self.capabilities or "async" in self.capabilities
 

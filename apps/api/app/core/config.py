@@ -85,6 +85,10 @@ class Settings(BaseSettings):
     video_api_key: str | None = None
     video_model: str = "mock-video"
     video_generation_concurrency: int = 2
+    task_poll_interval_sec: float = 0.5
+    task_lease_sec: int = 60
+    task_heartbeat_sec: int = 15
+    task_shutdown_timeout_sec: int = 30
     seedance2_api_base_url: str = "https://ark.cn-beijing.volces.com/api/v3"
     seedance2_api_key: str | None = None
     seedance2_model: str = "doubao-seedance-2-0-260128"
@@ -125,6 +129,12 @@ class Settings(BaseSettings):
     wan_i2v_fps: int = 16
     wan_i2v_max_area: int = 921600
     wan_i2v_upscale_1080p: bool = True
+    wan_t2v_api_base_url: str = "http://127.0.0.1:18083"
+    wan_t2v_api_key: str | None = None
+    wan_t2v_api_timeout_sec: int = 30
+    wan_t2v_api_poll_interval_sec: int = 10
+    wan_t2v_api_job_timeout_sec: int = 3600
+    wan_t2v_default_size: str = "832*480"
 
     @field_validator("cors_origins", mode="before")
     @classmethod

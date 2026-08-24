@@ -2,6 +2,7 @@ from pathlib import Path
 import json
 import tempfile
 import unittest
+from datetime import datetime, timedelta, timezone
 from unittest.mock import patch
 
 from fastapi import HTTPException
@@ -12,8 +13,16 @@ from app.agents.script_pipeline import ScriptPipelineFailure
 from app.db.session import create_database_engine, initialize_database
 from app.main import app
 from app.models import AgentConfig
+from app.platform.tasks.repository import TaskRepository
+from app.platform.tasks.runtime import LocalTaskRuntime
+from app.platform.tasks.types import TaskExecutionError
 from app.providers.mock import MockLLMProvider
-from app.providers.types import ProviderError, ProviderResponse, ProviderStatus
+from app.providers.types import (
+    ProviderError,
+    ProviderResponse,
+    ProviderStatus,
+    SubmissionState,
+)
 from app.schemas.project import ProjectCreate
 from app.services.project_service import create_project
 from app.services.script_generation_queue_service import recover_script_generation_tasks
@@ -91,6 +100,30 @@ class InvalidDraftProvider(RecordingMockLLMProvider):
             provider_task_id=response.provider_task_id,
             raw_response={"text": "{}"},
         )
+
+
+class RetryOnceDraftProvider(RecordingMockLLMProvider):
+    def __init__(self) -> None:
+        super().__init__()
+        self.draft_attempts = 0
+
+    def submit(self, request):
+        phase = str(request.metadata.get("phase") or "")
+        self.phases.append(phase)
+        if phase == "script_draft":
+            self.draft_attempts += 1
+            if self.draft_attempts == 1:
+                return ProviderResponse(
+                    status=ProviderStatus.FAILED,
+                    provider_task_id="",
+                    error=ProviderError(
+                        error_code="provider_temporarily_unavailable",
+                        error_message="request was rejected before acceptance",
+                        is_retryable=True,
+                        submission_state=SubmissionState.NOT_SUBMITTED,
+                    ),
+                )
+        return MockLLMProvider.submit(self, request)
 
 
 class ScriptGenerationQueueTests(unittest.TestCase):
@@ -220,13 +253,15 @@ class ScriptGenerationQueueTests(unittest.TestCase):
             self.assertNotIn("final_contract_review", completed.raw_response["checkpoint"])
             self.assertNotIn("revision_applied", completed.raw_response["checkpoint"])
 
-    def test_restart_requeues_running_task_without_losing_checkpoint(self):
+    def test_restart_recovers_only_expired_lease_without_losing_checkpoint(self):
         provider = RecordingMockLLMProvider()
         with self.session_factory() as db:
             project = self._project(db)
             with patch("app.services.script_service.provider_registry.get", return_value=provider):
                 task = create_script_generation_task(db, project.id)
             task.status = "running"
+            task.lease_owner = "stopped-worker"
+            task.lease_expires_at = datetime.now(timezone.utc) - timedelta(seconds=1)
             task.progress = 56
             task.raw_response = {
                 "checkpoint": {
@@ -243,8 +278,8 @@ class ScriptGenerationQueueTests(unittest.TestCase):
             db.refresh(task)
 
             self.assertIn(task.id, queued_ids)
-            self.assertEqual(task.status, "queued")
-            self.assertEqual(task.retry_count, 1)
+            self.assertEqual(task.status, "running")
+            self.assertEqual(task.retry_count, 0)
             self.assertEqual(task.raw_response["checkpoint"]["blueprint"]["premise"], "已保存的蓝图")
 
     def test_worker_reuses_saved_patch_response_without_repeating_provider_call(self):
@@ -340,6 +375,67 @@ class ScriptGenerationQueueTests(unittest.TestCase):
             self.assertEqual(completed.result_payload["quality_gate"], "pass")
             self.assertEqual(completed.result_payload["patched_scene_nos"], [1])
 
+    def test_not_submitted_script_phase_is_retried_once_from_last_checkpoint(self):
+        provider = RetryOnceDraftProvider()
+        with self.session_factory() as db:
+            project = self._project(db)
+            with patch("app.services.script_service.provider_registry.get", return_value=provider):
+                task = create_script_generation_task(db, project.id)
+                with self.assertRaises(TaskExecutionError) as raised:
+                    execute_script_generation_task(db, task.id)
+            self.assertEqual(
+                raised.exception.submission_state,
+                SubmissionState.NOT_SUBMITTED,
+            )
+            db.refresh(task)
+            self.assertNotIn(
+                "script_draft",
+                task.raw_response["checkpoint"]["responses"],
+            )
+
+            runtime = LocalTaskRuntime(session_factory=self.session_factory)
+            runtime._handle_execution_error(task.id, "test-worker", raised.exception)
+            db.refresh(task)
+            self.assertEqual(task.status, "queued")
+            self.assertEqual(task.retry_count, 1)
+
+            with patch("app.services.script_service.provider_registry.get", return_value=provider):
+                _script, completed = execute_script_generation_task(db, task.id)
+
+            self.assertEqual(completed.status, "succeeded")
+            self.assertEqual(provider.phases.count("story_blueprint"), 1)
+            self.assertEqual(provider.phases.count("script_draft"), 2)
+
+    def test_inflight_script_submission_is_not_repeated_after_restart(self):
+        provider = RecordingMockLLMProvider()
+        with self.session_factory() as db:
+            project = self._project(db)
+            with patch("app.services.script_service.provider_registry.get", return_value=provider):
+                task = create_script_generation_task(db, project.id)
+            task.status = "running"
+            task.raw_response = {
+                "checkpoint": {
+                    "pipeline_version": SCRIPT_QUALITY_PIPELINE_VERSION,
+                    "responses": {},
+                    "pipeline_trace": {"phases": [], "fallbacks": []},
+                    "inflight_phase": {
+                        "phase": "story_blueprint",
+                        "attempted_at": datetime.now(timezone.utc).isoformat(),
+                    },
+                }
+            }
+            db.add(task)
+            db.commit()
+
+            with patch("app.services.script_service.provider_registry.get", return_value=provider):
+                with self.assertRaises(ScriptPipelineFailure):
+                    execute_script_generation_task(db, task.id)
+
+            db.refresh(task)
+            self.assertEqual(provider.phases, [])
+            self.assertEqual(task.status, "failed")
+            self.assertEqual(task.error_code, "provider_submission_uncertain")
+
     def test_reviewer_can_use_a_separate_provider_and_model(self):
         writer = RecordingMockLLMProvider()
         writer.name = "writer_mock"
@@ -433,3 +529,9 @@ class ScriptGenerationQueueTests(unittest.TestCase):
             self.assertEqual(task.status, "failed")
             self.assertEqual(task.error_code, "script_generation_parse_failed")
             self.assertEqual(provider.phases, ["story_blueprint", "script_draft", "structure_recovery"])
+
+            retry = TaskRepository().retry(db, task).task
+            self.assertNotIn(
+                "structure_recovery",
+                retry.raw_response["checkpoint"]["responses"],
+            )
