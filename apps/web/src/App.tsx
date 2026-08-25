@@ -10,9 +10,17 @@ type Route =
   | { name: "create" }
   | { name: "project"; projectId: string }
   | { name: "assetGeneration"; projectId: string }
+  | { name: "script"; projectId: string }
   | { name: "models" }
   | { name: "shot"; projectId: string; shotId: string }
-  | { name: "tasks"; taskId?: string; projectId?: string };
+  | {
+      name: "tasks";
+      parentTaskId?: string;
+      projectId?: string;
+      resourceKey?: string;
+      taskId?: string;
+      taskType?: string;
+    };
 
 function parseRoute(): Route {
   const hash = window.location.hash.replace(/^#/, "");
@@ -30,8 +38,11 @@ function parseRoute(): Route {
   if (path === "/tasks") {
     return {
       name: "tasks",
+      parentTaskId: params.get("parent_task_id") ?? undefined,
       taskId: params.get("task_id") ?? undefined,
       projectId: params.get("project_id") ?? undefined,
+      resourceKey: params.get("resource_key") ?? undefined,
+      taskType: params.get("task_type") ?? undefined,
     };
   }
 
@@ -42,6 +53,11 @@ function parseRoute(): Route {
   const assetGenerationMatch = path.match(/^\/projects\/([^/]+)\/assets\/generate$/);
   if (assetGenerationMatch) {
     return { name: "assetGeneration", projectId: assetGenerationMatch[1] };
+  }
+
+  const scriptMatch = path.match(/^\/projects\/([^/]+)\/chapter$/);
+  if (scriptMatch) {
+    return { name: "script", projectId: scriptMatch[1] };
   }
 
   const assetsMatch = path.match(/^\/projects\/([^/]+)\/assets$/);
@@ -69,7 +85,12 @@ function parseRoute(): Route {
 
 export function App() {
   const [route, setRoute] = useState<Route>(() => parseRoute());
-  const isImmersiveProject = route.name === "project" || route.name === "shot" || route.name === "assetGeneration";
+  const isImmersiveProject = (
+    route.name === "project"
+    || route.name === "shot"
+    || route.name === "assetGeneration"
+    || route.name === "script"
+  );
 
   useEffect(() => {
     const onHashChange = () => setRoute(parseRoute());
@@ -83,10 +104,19 @@ export function App() {
       <section className="workspace">
         {route.name === "projects" ? <ProjectListPage /> : null}
         {route.name === "create" ? <ProjectListPage autoFocusCreation /> : null}
-        {route.name === "tasks" ? <TaskCenterPage initialProjectId={route.projectId} initialTaskId={route.taskId} /> : null}
+        {route.name === "tasks" ? (
+          <TaskCenterPage
+            initialParentTaskId={route.parentTaskId}
+            initialProjectId={route.projectId}
+            initialResourceKey={route.resourceKey}
+            initialTaskId={route.taskId}
+            initialTaskType={route.taskType}
+          />
+        ) : null}
         {route.name === "models" ? <ModelManagementPage /> : null}
         {route.name === "shot" ? <ProjectDetailPage initialShotId={route.shotId} projectId={route.projectId} /> : null}
         {route.name === "assetGeneration" ? <ProjectDetailPage initialWorkspace="asset-generation" projectId={route.projectId} /> : null}
+        {route.name === "script" ? <ProjectDetailPage initialWorkspace="script" projectId={route.projectId} /> : null}
         {route.name === "project" ? (
           <ProjectDetailPage projectId={route.projectId} />
         ) : null}

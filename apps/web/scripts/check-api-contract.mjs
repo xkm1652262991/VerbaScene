@@ -17,7 +17,10 @@ const requiredOperations = [
   ["get", "/api/projects/{project_id}/workflow/runs"],
   ["post", "/api/workflow/runs/{run_id}/cancel"],
   ["get", "/api/tasks"],
+  ["get", "/api/tasks/progress"],
   ["get", "/api/tasks/{task_id}"],
+  ["post", "/api/tasks/{task_id}/cancel"],
+  ["post", "/api/tasks/{task_id}/retry"],
   ["get", "/api/providers"],
   ["get", "/api/agent-configs"],
   ["post", "/api/agent-configs"],
@@ -29,6 +32,7 @@ const requiredOperations = [
   ["get", "/api/projects/{project_id}/asset-candidates"],
   ["post", "/api/asset-candidates/{candidate_id}/promote"],
   ["post", "/api/asset-candidates/{candidate_id}/reject"],
+  ["post", "/api/asset-candidates/{candidate_id}/regenerate"],
   ["post", "/api/assets/{asset_id}/select"],
   ["post", "/api/assets/{asset_id}/regenerate-candidate"],
   ["post", "/api/assets/{asset_id}/regenerate-video-candidate"],
@@ -45,6 +49,8 @@ const requiredOperations = [
   ["get", "/api/projects/{project_id}/shots/prompt-preview"],
   ["get", "/api/projects/{project_id}/shot-frame-images"],
   ["post", "/api/shots/{shot_id}/video/generate-candidate"],
+  ["post", "/api/projects/{project_id}/shot-videos/generate-candidates"],
+  ["post", "/api/projects/{project_id}/script/generate"],
   ["get", "/api/projects/{project_id}/dialogues"],
   ["put", "/api/projects/{project_id}/dialogues"],
   ["post", "/api/projects/{project_id}/compose"],
@@ -54,6 +60,7 @@ const requiredOperations = [
 const pageResponseOperations = [
   ["get", "/api/projects"],
   ["get", "/api/tasks"],
+  ["get", "/api/tasks/progress"],
   ["get", "/api/providers"],
   ["get", "/api/agent-configs"],
   ["get", "/api/prompt-versions"],
@@ -69,6 +76,31 @@ const pageResponseOperations = [
 
 const errors = [];
 
+const taskSubmissionPaths = [
+  "/api/projects/{project_id}/script/generate",
+  "/api/shots/{shot_id}/video/generate-candidate",
+  "/api/projects/{project_id}/shot-videos/generate-candidates",
+  "/api/assets/{asset_id}/regenerate-video-candidate",
+  "/api/tasks/{task_id}/cancel",
+  "/api/tasks/{task_id}/retry",
+];
+
+const idempotentGenerationPaths = [
+  ...taskSubmissionPaths.slice(0, 4),
+  "/api/asset-candidates/{candidate_id}/regenerate",
+];
+const requiredTaskFields = [
+  "parent_task_id",
+  "retry_of_task_id",
+  "resource_key",
+  "idempotency_key",
+  "status",
+  "max_retries",
+  "child_summary",
+  "heartbeat_at",
+  "cancel_requested_at",
+];
+
 for (const [method, path] of requiredOperations) {
   const operation = contract.paths?.[path]?.[method];
   if (!operation) {
@@ -81,6 +113,44 @@ for (const [method, path] of pageResponseOperations) {
   if (!usesPageResponse(schema)) {
     errors.push(`Expected PageResponse for ${method.toUpperCase()} ${path}`);
   }
+}
+
+for (const path of taskSubmissionPaths) {
+  const schema = contract.paths?.[path]?.post?.responses?.["202"]?.content?.["application/json"]?.schema;
+  if (typeof schema?.$ref !== "string" || !schema.$ref.includes("ApiResponse_GenerationTaskRead_")) {
+    errors.push(`Expected 202 GenerationTask response for POST ${path}`);
+  }
+}
+
+for (const path of idempotentGenerationPaths) {
+  const parameters = contract.paths?.[path]?.post?.parameters ?? [];
+  const hasIdempotencyHeader = parameters.some((parameter) => (
+    parameter?.in === "header" && parameter?.name === "Idempotency-Key"
+  ));
+  if (!hasIdempotencyHeader) {
+    errors.push(`Expected optional Idempotency-Key header for POST ${path}`);
+  }
+}
+
+const taskSchema = contract.components?.schemas?.GenerationTaskRead;
+const taskRequiredFields = new Set(taskSchema?.required ?? []);
+for (const field of requiredTaskFields) {
+  if (!taskRequiredFields.has(field)) {
+    errors.push(`GenerationTaskRead is missing required field: ${field}`);
+  }
+}
+
+if (contract.paths?.["/api/tasks/{task_id}/queue"]?.delete) {
+  errors.push("Legacy DELETE /api/tasks/{task_id}/queue must not be exposed");
+}
+
+const candidateRegenerationSchema = contract.paths?.["/api/asset-candidates/{candidate_id}/regenerate"]
+  ?.post?.responses?.["200"]?.content?.["application/json"]?.schema;
+if (
+  typeof candidateRegenerationSchema?.$ref !== "string"
+  || !candidateRegenerationSchema.$ref.includes("GenerationTaskRead")
+) {
+  errors.push("Asset candidate regeneration must expose its synchronous-or-task response union");
 }
 
 if (errors.length > 0) {

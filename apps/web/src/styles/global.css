@@ -4571,6 +4571,22 @@ h4 {
   padding: 10px;
 }
 
+.task-filter-controls {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.task-filter-controls select {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  color: var(--text-main);
+  min-height: 36px;
+  padding: 6px 9px;
+}
+
 .task-pagination {
   align-items: center;
   color: var(--text-muted);
@@ -4591,6 +4607,12 @@ h4 {
 
 .task-row.failed {
   border-color: #f3b8b8;
+}
+
+.task-row.waiting_provider,
+.task-row.waiting_children,
+.task-row.cancelling {
+  border-color: #e7c992;
 }
 
 .task-row.focused {
@@ -4617,6 +4639,65 @@ h4 {
 .task-row-meta {
   color: var(--text-muted);
   font-size: 13px;
+}
+
+.task-identity-grid {
+  display: grid;
+  gap: 7px;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+}
+
+.task-identity-grid span {
+  align-items: center;
+  background: var(--surface-soft);
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  color: var(--text-muted);
+  display: flex;
+  font-size: 11px;
+  gap: 7px;
+  min-width: 0;
+  padding: 7px 8px;
+}
+
+.task-identity-grid b {
+  color: var(--text-main);
+  flex: 0 0 auto;
+}
+
+.task-identity-grid code {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.task-child-summary,
+.task-lineage-links,
+.task-row-actions {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.task-child-summary span,
+.task-child-summary a,
+.task-lineage-links a {
+  background: #fff8ed;
+  border: 1px solid #ead4b8;
+  border-radius: 999px;
+  color: var(--text-muted);
+  font-size: 11px;
+  padding: 5px 8px;
+  text-decoration: none;
+}
+
+.task-row-actions {
+  justify-content: flex-end;
+}
+
+.task-row-actions button {
+  min-height: 34px;
 }
 
 .task-row-main em {
@@ -4696,6 +4777,123 @@ h4 {
   font-weight: 700;
   padding: 5px 9px;
   text-decoration: none;
+}
+
+.generation-task-banner {
+  background: #fffaf1;
+  border: 1px solid #ead3aa;
+  border-radius: 10px;
+  display: grid;
+  gap: 9px;
+  padding: 12px;
+}
+
+.generation-task-banner.failed {
+  background: #fff6f6;
+  border-color: #efbcbc;
+}
+
+.generation-task-banner.cancelled {
+  background: var(--surface-soft);
+  border-color: var(--line);
+}
+
+.generation-task-banner > header {
+  align-items: center;
+  display: flex;
+  gap: 10px;
+  justify-content: space-between;
+}
+
+.generation-task-banner > header > div {
+  display: grid;
+  gap: 2px;
+}
+
+.generation-task-banner > header strong {
+  color: var(--text-main);
+  font-size: 13px;
+}
+
+.generation-task-banner > header span,
+.generation-task-banner > header em,
+.generation-task-banner > p {
+  color: var(--text-muted);
+  font-size: 11px;
+  font-style: normal;
+  margin: 0;
+}
+
+.generation-task-banner > header em {
+  color: #9a681c;
+  font-weight: 850;
+}
+
+.generation-task-banner.failed > header em,
+.generation-task-banner.failed > p {
+  color: var(--danger);
+}
+
+.generation-task-progress {
+  background: rgba(154, 104, 28, 0.14);
+  border-radius: 999px;
+  height: 6px;
+  overflow: hidden;
+}
+
+.generation-task-progress i {
+  background: #b7791f;
+  display: block;
+  height: 100%;
+  transition: width 180ms ease;
+}
+
+.generation-task-children,
+.generation-task-banner > footer {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.generation-task-children span {
+  background: rgba(255, 255, 255, 0.76);
+  border: 1px solid rgba(154, 104, 28, 0.2);
+  border-radius: 999px;
+  color: var(--text-muted);
+  font-size: 10px;
+  padding: 4px 6px;
+}
+
+.generation-task-banner > footer > span {
+  flex: 1 1 auto;
+}
+
+.generation-task-banner > footer a,
+.generation-task-banner > footer button {
+  background: transparent;
+  border: 0;
+  color: #7155c6;
+  font-size: 10px;
+  font-weight: 750;
+  padding: 2px;
+  text-decoration: none;
+}
+
+.generation-task-banner > footer button {
+  color: var(--danger);
+  cursor: pointer;
+}
+
+.generation-task-banner > footer button:disabled {
+  cursor: wait;
+  opacity: 0.55;
+}
+
+.generation-task-banner.compact {
+  border-radius: 8px;
+  gap: 6px;
+  padding: 8px;
 }
 
 .asset-library-page {
@@ -8573,6 +8771,12 @@ h4 {
   font-size: 9px;
   min-height: 23px;
   padding: 3px 7px;
+}
+
+.director-timeline-actions {
+  align-items: center;
+  display: flex;
+  gap: 6px;
 }
 
 .director-timeline-scroll {

@@ -6,10 +6,13 @@ import type {
   AssetCandidate,
   Dialogue,
   EntityBundle,
+  GenerationTask,
   Shot,
   ShotVideoPromptPreview,
 } from "../../types/stageFive";
 import { AssetPreview } from "./AssetPreview";
+import { GenerationTaskBanner } from "./GenerationTaskBanner";
+import { generationTaskStatusLabel, isGenerationTaskActive } from "../../utils/generationTask";
 
 type AssetFilter = "character" | "scene" | "prop" | "material";
 type DurationMode = "provider_auto" | "fixed";
@@ -26,25 +29,31 @@ export type ShotDraftPayload = {
 };
 
 type DirectorWorkbenchProps = {
+  actionBusy: boolean;
   assets: Asset[];
+  batchTask: GenerationTask | null;
   candidates: AssetCandidate[];
   dialogues: Dialogue[];
   entities: EntityBundle;
   imageProfileId: string;
   imageProfiles: ImageProviderProfile[];
+  hasActiveVideoTask: boolean;
   onAdopt: (candidate: AssetCandidate) => void;
   onBindAssets: (assetIds: string[]) => Promise<boolean>;
+  onCancelTask: (task: GenerationTask) => void;
   onCompilePrompt: () => void;
   onCreateShot: () => void;
   onDeleteShot: (shot: Shot) => void;
   onExtractFrame: (asset: Asset) => void;
   onGenerateImage: () => void;
+  onGenerateAllVideos: () => void;
   onGenerateShots: () => void;
   onGenerateVideo: (videoPrompt: string, durationMode: DurationMode, durationSec: number | null) => void;
   onLocalRegenerate: (asset: Asset) => void;
   onOpenAssetLibrary: () => void;
   onPreviewPrompt: () => void;
   onReject: (candidate: AssetCandidate) => void;
+  onRetryTask: (task: GenerationTask) => void;
   onReorderShots: (shotIds: string[]) => void;
   onSaveDraft: (payload: ShotDraftPayload) => Promise<boolean>;
   onSelectAsset: (asset: Asset) => void;
@@ -53,30 +62,38 @@ type DirectorWorkbenchProps = {
   onSetFirstFrameReference: (assetId: string | null) => void;
   promptPreview: ShotVideoPromptPreview | null;
   selectedShot: Shot;
+  selectedShotTask: GenerationTask | null;
   selectedVideoProvider?: ProviderDescriptor;
   shots: Shot[];
+  videoTasks: GenerationTask[];
 };
 
 export function DirectorWorkbench({
+  actionBusy,
   assets,
+  batchTask,
   candidates,
   dialogues,
   entities,
   imageProfileId,
   imageProfiles,
+  hasActiveVideoTask,
   onAdopt,
   onBindAssets,
+  onCancelTask,
   onCompilePrompt,
   onCreateShot,
   onDeleteShot,
   onExtractFrame,
   onGenerateImage,
+  onGenerateAllVideos,
   onGenerateShots,
   onGenerateVideo,
   onLocalRegenerate,
   onOpenAssetLibrary,
   onPreviewPrompt,
   onReject,
+  onRetryTask,
   onReorderShots,
   onSaveDraft,
   onSelectAsset,
@@ -85,8 +102,10 @@ export function DirectorWorkbench({
   onSetFirstFrameReference,
   promptPreview,
   selectedShot,
+  selectedShotTask,
   selectedVideoProvider,
   shots,
+  videoTasks,
 }: DirectorWorkbenchProps) {
   const [assetFilter, setAssetFilter] = useState<AssetFilter>("character");
   const [assetSearch, setAssetSearch] = useState("");
@@ -188,6 +207,17 @@ export function DirectorWorkbench({
   const pendingCandidates = candidates
     .filter((candidate) => candidate.entity_type === "shot" && candidate.entity_id === selectedShot.id && candidate.status === "pending_review")
     .sort((left, right) => right.version - left.version);
+  const videoTaskByShotId = useMemo(() => {
+    const result = new Map<string, GenerationTask>();
+    videoTasks.forEach((task) => {
+      const match = task.resource_key?.match(/^shot:(.+):video$/);
+      const shotId = match?.[1];
+      if (shotId && !result.has(shotId)) result.set(shotId, task);
+    });
+    return result;
+  }, [videoTasks]);
+  const selectedShotTaskActive = Boolean(selectedShotTask && isGenerationTaskActive(selectedShotTask));
+  const batchTaskActive = Boolean(batchTask && isGenerationTaskActive(batchTask));
   const inspectedAsset = adoptedImages.find((asset) => asset.id === inspectedAssetId) ?? null;
   const previewAsset = previewChoice?.kind === "asset"
     ? selectedShotAssets.find((asset) => asset.id === previewChoice.id) ?? null
@@ -597,6 +627,26 @@ export function DirectorWorkbench({
           <div><span>PREVIEW</span><h2>视频预览</h2></div>
           <span className="director-model-badge">{selectedVideoProvider?.model ?? "视频模型未配置"}</span>
         </header>
+        {batchTask && batchTask.status !== "succeeded" ? (
+          <GenerationTaskBanner
+            actionBusy={actionBusy}
+            compact
+            onCancel={onCancelTask}
+            onRetry={onRetryTask}
+            task={batchTask}
+            title="项目视频批次"
+          />
+        ) : null}
+        {selectedShotTask && selectedShotTask.status !== "succeeded" ? (
+          <GenerationTaskBanner
+            actionBusy={actionBusy}
+            compact
+            onCancel={onCancelTask}
+            onRetry={onRetryTask}
+            task={selectedShotTask}
+            title={`片段 ${String(selectedShot.shot_no).padStart(2, "0")} 视频任务`}
+          />
+        ) : null}
         <div className="director-preview-canvas">
           {visibleMedia ? <MediaPreview media={visibleMedia} /> : <div className="director-empty">尚无首帧或视频</div>}
           <div className="director-preview-status">
@@ -625,7 +675,7 @@ export function DirectorWorkbench({
           </button>
           <button
             className="primary-button"
-            disabled={providerDurationExceeded}
+            disabled={providerDurationExceeded || selectedShotTaskActive || actionBusy}
             onClick={() => onGenerateVideo(
               draftPrompt,
               usesSmartDuration ? "provider_auto" : "fixed",
@@ -634,7 +684,7 @@ export function DirectorWorkbench({
             title={providerDurationExceeded ? "当前模型不支持这个片段总时长，请切换视频模型或调整片段方案" : undefined}
             type="button"
           >
-            生成视频
+            {selectedShotTaskActive ? "视频生成中" : "生成视频"}
           </button>
         </div>
         <p className="director-first-frame-mode">
@@ -694,7 +744,9 @@ export function DirectorWorkbench({
           <div className="director-preview-tools">
             <a download href={currentVideo.uri}>下载</a>
             <button onClick={() => onExtractFrame(currentVideo)} type="button">截帧</button>
-            <button onClick={() => onLocalRegenerate(currentVideo)} type="button">重新生成本片段</button>
+            <button disabled={selectedShotTaskActive || actionBusy} onClick={() => onLocalRegenerate(currentVideo)} type="button">
+              {selectedShotTaskActive ? "生成中" : "重新生成本片段"}
+            </button>
           </div>
         ) : null}
         <section className="director-version-strip">
@@ -720,12 +772,23 @@ export function DirectorWorkbench({
       <section className="director-timeline" aria-label="片段时间轴">
         <header>
           <div><strong>片段时间轴</strong><span>{shots.length} 个片段</span></div>
-          <button className="secondary-button" onClick={onGenerateShots} type="button">重新生成方案</button>
+          <div className="director-timeline-actions">
+            <button
+              className="primary-button"
+              disabled={hasActiveVideoTask || batchTaskActive || actionBusy}
+              onClick={onGenerateAllVideos}
+              title={hasActiveVideoTask ? "存在活动镜头任务，批次必须等这些任务结束后再提交" : undefined}
+              type="button"
+            >
+              {batchTaskActive ? "批次生成中" : "批量生成视频"}
+            </button>
+            <button className="secondary-button" disabled={actionBusy} onClick={onGenerateShots} type="button">重新生成方案</button>
+          </div>
         </header>
         <div className="director-timeline-scroll">
           {shots.map((shot, index) => {
             const thumbnail = shotThumbnail(shot, assets);
-            const status = shotStatus(shot, assets, candidates);
+            const status = shotStatus(shot, assets, candidates, videoTaskByShotId.get(shot.id));
             return (
               <article
                 aria-current={shot.id === selectedShot.id ? "true" : undefined}
@@ -954,15 +1017,23 @@ function shotThumbnail(shot: Shot, assets: Asset[]) {
   )) ?? null;
 }
 
-function shotStatus(shot: Shot, assets: Asset[], candidates: AssetCandidate[]) {
+function shotStatus(
+  shot: Shot,
+  assets: Asset[],
+  candidates: AssetCandidate[],
+  task?: GenerationTask,
+) {
   const pending = candidates.some((candidate) => candidate.entity_id === shot.id && candidate.status === "pending_review");
   const video = assets.find((asset) => asset.entity_id === shot.id && asset.asset_type === "video" && asset.is_selected);
   const image = assets.find((asset) => asset.entity_id === shot.id && asset.asset_type === "image" && asset.is_selected);
+  if (task && isGenerationTaskActive(task)) return { label: generationTaskStatusLabel(task.status), tone: "warning" };
+  if (task?.status === "failed") return { label: "生成失败", tone: "error" };
   if (shot.status === "failed") return { label: "失败", tone: "error" };
   if (shot.shot_card.prompt_stale) return { label: "Prompt 过期", tone: "warning" };
   if (pending) return { label: "候选待采用", tone: "warning" };
   if (video) return { label: `视频 v${video.version}`, tone: "ready" };
   if (image) return { label: `首帧 v${image.version}`, tone: "image" };
+  if (task?.status === "cancelled") return { label: "已取消", tone: "empty" };
   return { label: "未生成", tone: "empty" };
 }
 

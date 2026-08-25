@@ -2,10 +2,12 @@ import { useEffect, useMemo, useState } from "react";
 
 import { AssetPreview } from "../components/studio/AssetPreview";
 import { DirectorWorkbench, type ShotDraftPayload } from "../components/studio/DirectorWorkbench";
+import { GenerationTaskBanner } from "../components/studio/GenerationTaskBanner";
 import { ScriptCreationTrace } from "../components/studio/ScriptCreationTrace";
 import { StageRunSummary } from "../components/studio/StageRunSummary";
 import {
   compileShotVideoPrompt,
+  cancelGenerationTask,
   cancelProjectStageRun,
   composeProject,
   createProjectShot,
@@ -18,14 +20,17 @@ import {
   generateSingleReferenceImageCandidate,
   generateSingleShotImageCandidate,
   generateSingleShotVideoCandidate,
-  getGenerationTask,
+  generateShotVideoCandidates,
   getProjectWorkbench,
   getShotVideoPromptPreview,
   listImageProviderProfiles,
+  listGenerationTaskProgress,
+  listGenerationTasks,
   listProviders,
   promoteAssetCandidate,
   rejectAssetCandidate,
   regenerateVideoAssetCandidate,
+  retryGenerationTask,
   reorderShots,
   saveProjectDialogues,
   selectAsset,
@@ -59,6 +64,12 @@ import type {
   ShotVideoPromptPreview,
 } from "../types/stageFive";
 import { normalizeProductionScenes, renderReadableReviewScript } from "../utils/productionScript";
+import {
+  createTaskIdempotencyKey,
+  isGenerationTaskActive,
+  isGenerationTaskTerminal,
+  mergeGenerationTask,
+} from "../utils/generationTask";
 
 type ManagementDrawer = "script" | "asset-generation" | "assets" | null;
 type EntityKind = "character" | "scene" | "prop";
@@ -73,14 +84,14 @@ type EntityItem = {
 
 type ProjectDetailPageProps = {
   initialShotId?: string;
-  initialWorkspace?: "asset-generation";
+  initialWorkspace?: "asset-generation" | "script";
   projectId: string;
 };
 
 export function ProjectDetailPage({ initialShotId, initialWorkspace, projectId }: ProjectDetailPageProps) {
   const [snapshot, setSnapshot] = useState<ProjectWorkbenchPayload | null>(null);
   const [managementDrawer, setManagementDrawer] = useState<ManagementDrawer>(
-    initialWorkspace === "asset-generation" ? "asset-generation" : null,
+    initialWorkspace === "asset-generation" || initialWorkspace === "script" ? initialWorkspace : null,
   );
   const [chapterDraft, setChapterDraft] = useState("");
   const [dialogueDrafts, setDialogueDrafts] = useState<Dialogue[]>([]);
@@ -91,7 +102,8 @@ export function ProjectDetailPage({ initialShotId, initialWorkspace, projectId }
   const [imageProfiles, setImageProfiles] = useState<ImageProviderProfile[]>([]);
   const [imageProfileId, setImageProfileId] = useState("");
   const [providers, setProviders] = useState<ProviderDescriptor[]>([]);
-  const [scriptGenerationTask, setScriptGenerationTask] = useState<GenerationTask | null>(null);
+  const [projectTasks, setProjectTasks] = useState<GenerationTask[]>([]);
+  const [taskRefreshVersion, setTaskRefreshVersion] = useState(0);
   const [exportOpen, setExportOpen] = useState(false);
   const [subtitleMode, setSubtitleMode] = useState<SubtitleMode>("none");
   const [styleDraft, setStyleDraft] = useState("");
@@ -143,6 +155,8 @@ export function ProjectDetailPage({ initialShotId, initialWorkspace, projectId }
           : next.shots[0]?.id ?? "");
         if (initialWorkspace === "asset-generation") {
           setManagementDrawer("asset-generation");
+        } else if (initialWorkspace === "script") {
+          setManagementDrawer("script");
         } else if (!next.shots.length) {
           setManagementDrawer(next.script ? "asset-generation" : "script");
         }
@@ -222,26 +236,92 @@ export function ProjectDetailPage({ initialShotId, initialWorkspace, projectId }
 
   const selectedShot = snapshot?.shots.find((shot) => shot.id === selectedShotId) ?? null;
   useEffect(() => setPromptPreview(null), [selectedShot?.id, selectedShot?.video_prompt]);
-  const latestScriptTaskId = snapshot?.stage_runs.find((runRecord) => (
-    runRecord.stage === "script" && Boolean(runRecord.task_id)
-  ))?.task_id ?? null;
+
   useEffect(() => {
     let cancelled = false;
-    if (!latestScriptTaskId) {
-      setScriptGenerationTask(null);
-      return () => { cancelled = true; };
+    let timer: number | undefined;
+    let lastFullSyncAt = 0;
+    let knownTaskIds = new Set<string>();
+    let knownTaskStatuses = new Map<string, GenerationTask["status"]>();
+
+    async function syncTerminalTaskResults(tasks: Array<Pick<GenerationTask, "status" | "task_type">>) {
+      if (!tasks.length) return;
+      const next = await getProjectWorkbench(projectId);
+      if (cancelled) return;
+      setSnapshot(next);
+      if (tasks.some((task) => task.task_type === "script_generation" && task.status === "succeeded")) {
+        setDialogueDrafts(next.dialogues);
+      }
     }
-    getGenerationTask(latestScriptTaskId)
-      .then((task) => {
-        if (!cancelled && task.task_type === "script_generation") {
-          setScriptGenerationTask(task);
+
+    async function syncTasks() {
+      let nextDelay = 8000;
+      try {
+        if (Date.now() - lastFullSyncAt >= 15000) {
+          const response = await listGenerationTasks({ projectId, limit: 200 });
+          if (!cancelled) {
+            const reachedTerminalTasks = response.items.filter((task) => {
+              const previousStatus = knownTaskStatuses.get(task.id);
+              return Boolean(
+                previousStatus
+                && isGenerationTaskActive(previousStatus)
+                && isGenerationTaskTerminal(task.status),
+              );
+            });
+            setProjectTasks(response.items);
+            knownTaskIds = new Set(response.items.map((task) => task.id));
+            knownTaskStatuses = new Map(response.items.map((task) => [task.id, task.status]));
+            lastFullSyncAt = Date.now();
+            nextDelay = response.items.some((task) => isGenerationTaskActive(task.status)) ? 2000 : 8000;
+            await syncTerminalTaskResults(reachedTerminalTasks);
+          }
+        } else {
+          const response = await listGenerationTaskProgress({ projectId, limit: 200 });
+          if (!cancelled) {
+            const progressById = new Map(response.items.map((task) => [task.id, task]));
+            const reachedTerminalTasks = response.items.filter((task) => {
+              const previousStatus = knownTaskStatuses.get(task.id);
+              return Boolean(
+                previousStatus
+                && isGenerationTaskActive(previousStatus)
+                && isGenerationTaskTerminal(task.status),
+              );
+            });
+            response.items.forEach((task) => knownTaskStatuses.set(task.id, task.status));
+            setProjectTasks((current) => current.map((task) => ({
+              ...task,
+              ...(progressById.get(task.id) ?? {}),
+            })));
+            if (response.items.some((task) => !knownTaskIds.has(task.id))) {
+              lastFullSyncAt = 0;
+            }
+            nextDelay = response.items.some((task) => isGenerationTaskActive(task.status)) ? 2000 : 8000;
+            await syncTerminalTaskResults(reachedTerminalTasks);
+          }
         }
-      })
-      .catch(() => {
-        if (!cancelled) setScriptGenerationTask(null);
-      });
-    return () => { cancelled = true; };
-  }, [latestScriptTaskId]);
+      } catch {
+        // Workbench actions surface request failures. Background task polling
+        // stays non-blocking so it cannot interrupt a local edit.
+      } finally {
+        if (!cancelled) timer = window.setTimeout(() => void syncTasks(), nextDelay);
+      }
+    }
+
+    void syncTasks();
+    return () => {
+      cancelled = true;
+      if (timer !== undefined) window.clearTimeout(timer);
+    };
+  }, [projectId, taskRefreshVersion]);
+
+  const scriptGenerationTask = projectTasks.find((task) => task.task_type === "script_generation") ?? null;
+  const selectedShotVideoTask = selectedShot
+    ? projectTasks.find((task) => task.resource_key === `shot:${selectedShot.id}:video`) ?? null
+    : null;
+  const projectVideoBatchTask = projectTasks.find((task) => task.task_type === "project_video_candidate_batch") ?? null;
+  const hasActiveVideoTask = projectTasks.some((task) => (
+    task.task_type === "shot_video_candidate_generation" && isGenerationTaskActive(task)
+  ));
 
   async function run(actionLabel: string, action: () => Promise<unknown>, successMessage: string) {
     try {
@@ -258,6 +338,44 @@ export function ProjectDetailPage({ initialShotId, initialWorkspace, projectId }
     } finally {
       setBusyLabel("");
     }
+  }
+
+  async function submitTask(
+    actionLabel: string,
+    action: () => Promise<GenerationTask>,
+    acceptedMessage: string,
+  ) {
+    try {
+      setBusyLabel(actionLabel);
+      setError("");
+      setMessage("");
+      const task = await action();
+      setProjectTasks((current) => mergeGenerationTask(current, task));
+      setTaskRefreshVersion((current) => current + 1);
+      setMessage(`${acceptedMessage}（任务 ${task.id.slice(0, 8)}）`);
+      return task;
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : `${actionLabel}失败`);
+      return null;
+    } finally {
+      setBusyLabel("");
+    }
+  }
+
+  async function cancelTask(task: GenerationTask) {
+    await submitTask(
+      "取消生成任务",
+      () => cancelGenerationTask(task.id),
+      task.status === "queued" ? "排队任务已取消" : "取消请求已提交，将在下一检查点停止",
+    );
+  }
+
+  async function retryTask(task: GenerationTask) {
+    await submitTask(
+      "重试生成任务",
+      () => retryGenerationTask(task.id),
+      "已使用原始输入快照创建重试任务",
+    );
   }
 
   function handleUploadImage(entity: EntityItem, variantKey: string, file: File) {
@@ -287,12 +405,12 @@ export function ProjectDetailPage({ initialShotId, initialWorkspace, projectId }
 
   function openScript() {
     setManagementDrawer("script");
-    window.history.replaceState(null, "", `#/projects/${projectId}`);
+    window.history.replaceState(null, "", `#/projects/${projectId}/chapter`);
   }
 
   function openDirector() {
     setManagementDrawer(null);
-    const firstShotId = snapshot?.shots[0]?.id;
+    const firstShotId = selectedShotId || snapshot?.shots[0]?.id;
     window.history.replaceState(
       null,
       "",
@@ -328,7 +446,7 @@ export function ProjectDetailPage({ initialShotId, initialWorkspace, projectId }
           <span>{project.target_duration_sec ?? 90} 秒</span>
         </div>
         <nav className="director-project-actions" aria-label="项目工具">
-          <button onClick={() => setManagementDrawer("script")} type="button">
+          <button onClick={openScript} type="button">
             剧本 <small>{snapshot.script ? `v${snapshot.script.version}` : project.chapters[0] ? "原稿" : "未生成"}</small>
           </button>
           <button onClick={openAssetLibrary} type="button">资产库 <small>{entityItems(snapshot.entities).length} 项</small></button>
@@ -394,12 +512,15 @@ export function ProjectDetailPage({ initialShotId, initialWorkspace, projectId }
 
       {selectedShot ? (
         <DirectorWorkbench
+          actionBusy={Boolean(busyLabel)}
           assets={snapshot.historical_assets ?? snapshot.assets}
+          batchTask={projectVideoBatchTask}
           candidates={snapshot.asset_candidates}
           dialogues={dialogueDrafts}
           entities={snapshot.entities}
           imageProfileId={imageProfileId}
           imageProfiles={imageProfiles}
+          hasActiveVideoTask={hasActiveVideoTask}
           onAdopt={(candidate) => run(
             "采用片段版本",
             () => promoteAssetCandidate(candidate.id, "从视频制作页采用"),
@@ -419,6 +540,7 @@ export function ProjectDetailPage({ initialShotId, initialWorkspace, projectId }
             },
             "最终 Prompt 已按当前对白、音效和资产引用重新编译。",
           )}
+          onCancelTask={(task) => { void cancelTask(task); }}
           onCreateShot={() => {
             void run(
               "新增片段",
@@ -464,27 +586,40 @@ export function ProjectDetailPage({ initialShotId, initialWorkspace, projectId }
             () => generateProjectShots(projectId),
             "视频片段和内部镜头节拍已生成。",
           )}
-          onGenerateVideo={(videoPrompt, durationMode, durationSec) => selectedShot && run(
+          onGenerateAllVideos={() => {
+            if (!window.confirm(`将为当前项目的 ${snapshot.shots.length} 个片段创建视频任务，是否继续？`)) return;
+            void submitTask(
+              "提交项目视频批次",
+              () => generateShotVideoCandidates(projectId, {
+                idempotencyKey: createTaskIdempotencyKey(`project:${projectId}:videos`),
+              }),
+              "项目视频批次已受理，可继续编辑其他内容",
+            );
+          }}
+          onGenerateVideo={(videoPrompt, durationMode, durationSec) => selectedShot && submitTask(
             "提交视频候选",
-            async () => {
-              const task = await generateSingleShotVideoCandidate(selectedShot.id, {
+            () => generateSingleShotVideoCandidate(
+              selectedShot.id,
+              {
                 duration_mode: durationMode,
                 duration_sec: durationSec,
                 video_prompt: videoPrompt,
-              });
-              await waitForTask(task.id);
-            },
-            "视频候选任务已完成；可以采用或继续保留当前版本。",
+              },
+              { idempotencyKey: createTaskIdempotencyKey(`shot:${selectedShot.id}:video`) },
+            ),
+            "视频候选任务已受理，可继续编辑其他片段",
           )}
           onExtractFrame={(asset) => run(
             "截取片段首帧",
             () => extractVideoFrameCandidate(asset.id, 0),
             "已从当前视频截取首帧候选，采用后才会切换片段首帧。",
           )}
-          onLocalRegenerate={(asset) => run(
+          onLocalRegenerate={(asset) => submitTask(
             "重新生成本片段",
-            () => regenerateVideoAssetCandidate(asset.id),
-            "当前片段的新候选已生成。",
+            () => regenerateVideoAssetCandidate(asset.id, {
+              idempotencyKey: createTaskIdempotencyKey(`asset:${asset.id}:regenerate-video`),
+            }),
+            "局部重生成任务已受理，当前版本保持不变",
           )}
           onOpenAssetLibrary={openAssetLibrary}
           onPreviewPrompt={async () => {
@@ -500,6 +635,7 @@ export function ProjectDetailPage({ initialShotId, initialWorkspace, projectId }
             () => rejectAssetCandidate(candidate.id, "从导演台拒绝"),
             "候选已拒绝，当前版本未改变。",
           )}
+          onRetryTask={(task) => { void retryTask(task); }}
           onReorderShots={(shotIds) => {
             void run(
               "调整片段顺序",
@@ -543,8 +679,10 @@ export function ProjectDetailPage({ initialShotId, initialWorkspace, projectId }
           )}
           promptPreview={promptPreview}
           selectedShot={selectedShot}
+          selectedShotTask={selectedShotVideoTask}
           selectedVideoProvider={selectedVideoProvider}
           shots={snapshot.shots}
+          videoTasks={projectTasks.filter((task) => task.task_type === "shot_video_candidate_generation")}
         />
       ) : (
         <section className="director-bootstrap">
@@ -580,7 +718,7 @@ export function ProjectDetailPage({ initialShotId, initialWorkspace, projectId }
       )}
 
       {managementDrawer ? (
-        <div className="director-drawer-backdrop" onClick={managementDrawer === "asset-generation" ? openDirector : () => setManagementDrawer(null)} role="presentation">
+        <div className="director-drawer-backdrop" onClick={openDirector} role="presentation">
           <section
             aria-label={managementDrawer === "script" ? "剧本管理" : managementDrawer === "asset-generation" ? "资产图生成" : "资产库管理"}
             aria-modal="true"
@@ -597,7 +735,7 @@ export function ProjectDetailPage({ initialShotId, initialWorkspace, projectId }
                 {managementDrawer === "asset-generation" ? (
                   <button className="director-management-back-button" onClick={openScript} type="button">← 返回剧本</button>
                 ) : null}
-                <button aria-label="关闭当前页面" onClick={managementDrawer === "asset-generation" ? openDirector : () => setManagementDrawer(null)} type="button">×</button>
+                <button aria-label="关闭当前页面" onClick={openDirector} type="button">×</button>
               </div>
             </header>
             <div className="director-management-scroll">
@@ -606,22 +744,24 @@ export function ProjectDetailPage({ initialShotId, initialWorkspace, projectId }
                   chapter={project.chapters[0] ?? null}
                   chapterDraft={chapterDraft}
                   onChapterDraftChange={setChapterDraft}
+                  onCancelTask={(task) => { void cancelTask(task); }}
                   onContinue={openAssetGeneration}
                   onGenerate={() => {
-                    void run(
+                    void submitTask(
                       snapshot.script ? "重新生成剧本" : "生成剧本",
                       async () => {
                         const chapter = project.chapters[0];
                         if (chapter && chapterDraft !== chapterInputText(chapter)) {
                           await upsertProjectChapter(projectId, chapterUpdatePayload(chapter, chapterDraft));
                         }
-                        return generateProjectScript(projectId);
+                        return generateProjectScript(projectId, {
+                          idempotencyKey: createTaskIdempotencyKey(`project:${projectId}:script`),
+                        });
                       },
-                      "英语剧本已生成，即将进入资产图生成。",
-                    ).then((success) => {
-                      if (success) openAssetGeneration();
-                    });
+                      "剧本任务已受理，完成前仍可留在当前工作区编辑",
+                    );
                   }}
+                  onRetryTask={(task) => { void retryTask(task); }}
                   onSaveChapter={() => {
                     const chapter = project.chapters[0];
                     if (!chapter) return;
@@ -633,6 +773,7 @@ export function ProjectDetailPage({ initialShotId, initialWorkspace, projectId }
                   }}
                   script={snapshot.script}
                   scriptTask={scriptGenerationTask}
+                  taskActionBusy={Boolean(busyLabel)}
                 />
               ) : managementDrawer === "asset-generation" ? (
                 <AssetGenerationWorkspace
@@ -754,41 +895,37 @@ export function ProjectDetailPage({ initialShotId, initialWorkspace, projectId }
     }
   }
 
-  async function waitForTask(taskId: string) {
-    for (let attempt = 0; attempt < 120; attempt += 1) {
-      const task = await getGenerationTask(taskId);
-      if (task.status === "succeeded") return;
-      if (task.status === "failed" || task.status === "cancelled") {
-        throw new Error(task.error_message || "视频任务失败");
-      }
-      await new Promise((resolve) => window.setTimeout(resolve, 1000));
-    }
-    throw new Error("视频任务仍在运行，可在任务中心继续查看");
-  }
 }
 
 function ScriptWorkspace({
   chapter,
   chapterDraft,
   onChapterDraftChange,
+  onCancelTask,
   onContinue,
   onGenerate,
+  onRetryTask,
   onSaveChapter,
   script,
   scriptTask,
+  taskActionBusy,
 }: {
   chapter: Chapter | null;
   chapterDraft: string;
   onChapterDraftChange: (value: string) => void;
+  onCancelTask: (task: GenerationTask) => void;
   onContinue: () => void;
   onGenerate: () => void;
+  onRetryTask: (task: GenerationTask) => void;
   onSaveChapter: () => void;
   script: ProjectWorkbenchPayload["script"];
   scriptTask: GenerationTask | null;
+  taskActionBusy: boolean;
 }) {
   const readableContent = script
     ? renderReadableReviewScript(normalizeProductionScenes(script)) || script.content
     : "";
+  const scriptTaskActive = Boolean(scriptTask && isGenerationTaskActive(scriptTask));
 
   return (
     <section className="workflow-panel english-script-workspace">
@@ -799,11 +936,26 @@ function ScriptWorkspace({
           <p>这里只审阅可读剧本；制作结构、对白和音效会在后台及对应片段中维护。</p>
         </div>
         <div className="shot-overview-actions">
-          <button className="secondary-button" onClick={onGenerate} type="button">
-            {script ? "重新生成" : chapter?.input_mode === "imported_script" ? "AI 整理为结构化剧本" : "AI 生成剧本"}
+          <button className="secondary-button" disabled={scriptTaskActive || taskActionBusy} onClick={onGenerate} type="button">
+            {scriptTaskActive
+              ? "剧本任务进行中"
+              : script
+                ? "重新生成"
+                : chapter?.input_mode === "imported_script"
+                  ? "AI 整理为结构化剧本"
+                  : "AI 生成剧本"}
           </button>
         </div>
       </header>
+      {scriptTask && scriptTask.status !== "succeeded" ? (
+        <GenerationTaskBanner
+          actionBusy={taskActionBusy}
+          onCancel={onCancelTask}
+          onRetry={onRetryTask}
+          task={scriptTask}
+          title="剧本生成任务"
+        />
+      ) : null}
       {script ? (
         <>
           <section className="readable-script-workspace">
@@ -813,7 +965,7 @@ function ScriptWorkspace({
             </div>
             <pre className="readable-script-document">{readableContent || "当前版本没有可读正文。"}</pre>
           </section>
-          <ScriptCreationTrace task={scriptTask} />
+          <ScriptCreationTrace task={scriptTask?.status === "succeeded" ? scriptTask : null} />
           <footer className="script-next-step">
             <div><strong>剧本确认完成？</strong><span>下一步集中生成角色和场景资产图。</span></div>
             <button className="primary-button" onClick={onContinue} type="button">下一步：生成资产图 →</button>

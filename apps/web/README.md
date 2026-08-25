@@ -21,6 +21,7 @@ cp .env.example .env.local
 ```text
 #/projects                         项目列表与创建入口
 #/projects/{project_id}            项目工作台
+#/projects/{project_id}/chapter    项目剧本抽屉
 #/projects/{project_id}/assets     项目工作台的资产视图
 #/projects/{project_id}/assets/generate 资产图生成
 #/projects/{project_id}/shots/{shot_id} 单片段编辑定位
@@ -42,8 +43,9 @@ npm run build
 ## 当前边界
 
 - 使用轻量 Hash 路由，没有引入独立路由框架。
-- 页面读取 `/workbench` 聚合快照，长任务通过任务查询更新状态。
+- 页面读取 `/workbench` 聚合快照，剧本和视频长任务统一通过任务查询更新状态；活动任务支持取消，失败或取消任务支持人工重试。
 - 生成时只锁定同一资源的重复提交，不锁定整个工作区。
+- 项目视频批量生成按父子任务展示汇总与镜头级状态，前端不会把 `202` 受理响应误报为生成完成。
 - 当前是内部单机工具界面，没有登录、权限和多租户 UI。
 
 产品布局见 [前端工作台设计](../../docs/08-frontend-workbench.md)。

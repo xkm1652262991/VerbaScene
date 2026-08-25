@@ -437,29 +437,50 @@ export type ExportRecord = {
   updated_at: string;
 };
 
+export type GenerationTaskStatus =
+  | "queued"
+  | "running"
+  | "waiting_provider"
+  | "waiting_children"
+  | "cancelling"
+  | "succeeded"
+  | "failed"
+  | "cancelled";
+
+export type TaskContextLink = {
+  target_type: string;
+  target_id: string;
+  role: string;
+  label: string | null;
+};
+
 export type GenerationTask = {
   id: string;
   project_id: string;
   task_type: string;
+  parent_task_id: string | null;
+  retry_of_task_id: string | null;
+  resource_key: string | null;
+  idempotency_key: string | null;
   provider: string | null;
   model: string | null;
   provider_task_id: string | null;
   input_payload: Record<string, unknown>;
   output_asset_ids: string[];
   result_payload: Record<string, unknown>;
-  status: string;
+  status: GenerationTaskStatus;
   progress: number;
   progress_label: string | null;
   retry_count: number;
+  max_retries: number;
   error_code: string | null;
   error_message: string | null;
+  cost_estimate: string | number | null;
   raw_response: Record<string, unknown>;
-  context_links: Array<{
-    target_type: string;
-    target_id: string;
-    role: string;
-    label: string | null;
-  }>;
+  child_summary: Record<string, number>;
+  context_links: TaskContextLink[];
+  heartbeat_at: string | null;
+  cancel_requested_at: string | null;
   started_at: string | null;
   finished_at: string | null;
   created_at: string;

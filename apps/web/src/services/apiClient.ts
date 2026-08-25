@@ -17,6 +17,7 @@ import type {
   EntityBundle,
   ExportRecord,
   GenerationTask,
+  GenerationTaskStatus,
   ProjectReadiness,
   QualityCheck,
   Prop,
@@ -114,6 +115,20 @@ export type PageResponse<T> = {
 export type ApiResponse<T> = {
   success: boolean;
   data: T;
+};
+
+export type GenerationTaskRequestOptions = {
+  idempotencyKey?: string;
+};
+
+export type GenerationTaskListOptions = {
+  projectId?: string;
+  status?: GenerationTaskStatus;
+  parentTaskId?: string;
+  taskType?: string;
+  resourceKey?: string;
+  offset?: number;
+  limit?: number;
 };
 
 export type ProviderDescriptor = {
@@ -348,6 +363,11 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
+function idempotencyHeaders(options?: GenerationTaskRequestOptions) {
+  const key = options?.idempotencyKey?.trim();
+  return key ? { "Idempotency-Key": key } : undefined;
+}
+
 export async function getHealth() {
   return request<{
     status: string;
@@ -515,26 +535,11 @@ export function getProjectScript(projectId: string) {
   return request<Script>(`/api/projects/${projectId}/script`);
 }
 
-export async function generateProjectScript(projectId: string) {
-  const accepted = await request<GenerationTask>(`/api/projects/${projectId}/script/generate`, {
+export function generateProjectScript(projectId: string, options?: GenerationTaskRequestOptions) {
+  return request<GenerationTask>(`/api/projects/${projectId}/script/generate`, {
     method: "POST",
+    headers: idempotencyHeaders(options),
   });
-  const deadline = Date.now() + 15 * 60 * 1000;
-  let task = accepted;
-  while (task.status === "queued" || task.status === "running") {
-    if (Date.now() >= deadline) {
-      throw new Error(`剧本任务仍在后台执行，可在任务中心继续查看：${task.id}`);
-    }
-    await new Promise((resolve) => window.setTimeout(resolve, 1000));
-    task = await request<GenerationTask>(`/api/tasks/${task.id}`);
-  }
-  if (task.status !== "succeeded") {
-    throw new Error(task.error_message || `剧本任务未完成：${task.status}`);
-  }
-  return {
-    script: await getProjectScript(projectId),
-    task_id: task.id,
-  };
 }
 
 export function updateScript(scriptId: string, payload: Pick<Script, "scenes">) {
@@ -689,13 +694,17 @@ export function rejectAssetCandidate(candidateId: string, reviewNote?: string) {
   });
 }
 
-export function regenerateAssetCandidate(candidateId: string, imageProviderProfileId?: string | null) {
+export function regenerateAssetCandidate(
+  candidateId: string,
+  imageProviderProfileId?: string | null,
+  options?: GenerationTaskRequestOptions,
+) {
   const params = new URLSearchParams();
   if (imageProviderProfileId) params.set("image_provider_profile_id", imageProviderProfileId);
   const query = params.toString();
-  return request<{ candidates: AssetCandidate[]; task_id: string }>(
+  return request<{ candidates: AssetCandidate[]; task_id: string } | GenerationTask>(
     `/api/asset-candidates/${candidateId}/regenerate${query ? `?${query}` : ""}`,
-    { method: "POST" },
+    { method: "POST", headers: idempotencyHeaders(options) },
   );
 }
 
@@ -787,9 +796,10 @@ export function regenerateImageAssetCandidate(assetId: string, imageProviderProf
   });
 }
 
-export function regenerateVideoAssetCandidate(assetId: string) {
-  return request<{ candidates: AssetCandidate[]; task_id: string }>(`/api/assets/${assetId}/regenerate-video-candidate`, {
+export function regenerateVideoAssetCandidate(assetId: string, options?: GenerationTaskRequestOptions) {
+  return request<GenerationTask>(`/api/assets/${assetId}/regenerate-video-candidate`, {
     method: "POST",
+    headers: idempotencyHeaders(options),
   });
 }
 
@@ -844,11 +854,12 @@ export async function uploadImageAsset(
   return normalizeApiPayload<Asset>(responsePayload);
 }
 
-export function generateShotVideoCandidates(projectId: string) {
-  return request<{ candidates: AssetCandidate[]; task_id: string }>(
+export function generateShotVideoCandidates(projectId: string, options?: GenerationTaskRequestOptions) {
+  return request<GenerationTask>(
     `/api/projects/${projectId}/shot-videos/generate-candidates`,
     {
       method: "POST",
+      headers: idempotencyHeaders(options),
     },
   );
 }
@@ -860,19 +871,27 @@ export function generateSingleShotVideoCandidate(
     duration_sec?: number | string | null;
     video_prompt?: string | null;
   },
+  options?: GenerationTaskRequestOptions,
 ) {
   return request<GenerationTask>(
     `/api/shots/${shotId}/video/generate-candidate`,
     {
       method: "POST",
+      headers: idempotencyHeaders(options),
       body: JSON.stringify(payload),
     },
   );
 }
 
-export function cancelQueuedGenerationTask(taskId: string) {
-  return request<GenerationTask>(`/api/tasks/${taskId}/queue`, {
-    method: "DELETE",
+export function cancelGenerationTask(taskId: string) {
+  return request<GenerationTask>(`/api/tasks/${taskId}/cancel`, {
+    method: "POST",
+  });
+}
+
+export function retryGenerationTask(taskId: string) {
+  return request<GenerationTask>(`/api/tasks/${taskId}/retry`, {
+    method: "POST",
   });
 }
 
@@ -908,13 +927,22 @@ export function getGenerationTask(taskId: string) {
   return request<GenerationTask>(`/api/tasks/${taskId}`);
 }
 
-export function listGenerationTasks(options: { projectId?: string; status?: string; offset?: number; limit?: number } = {}) {
+export function listGenerationTasks(options: GenerationTaskListOptions = {}) {
   const params = new URLSearchParams();
   if (options.projectId) {
     params.set("project_id", options.projectId);
   }
   if (options.status) {
     params.set("status", options.status);
+  }
+  if (options.parentTaskId) {
+    params.set("parent_task_id", options.parentTaskId);
+  }
+  if (options.taskType) {
+    params.set("task_type", options.taskType);
+  }
+  if (options.resourceKey) {
+    params.set("resource_key", options.resourceKey);
   }
   if (typeof options.offset === "number") {
     params.set("offset", String(options.offset));
@@ -927,7 +955,7 @@ export function listGenerationTasks(options: { projectId?: string; status?: stri
 }
 
 export function listGenerationTaskProgress(
-  options: { projectId?: string; status?: string; offset?: number; limit?: number } = {},
+  options: { projectId?: string; status?: GenerationTaskStatus; offset?: number; limit?: number } = {},
 ) {
   const params = new URLSearchParams();
   if (options.projectId) {

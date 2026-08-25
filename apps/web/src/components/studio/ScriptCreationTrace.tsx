@@ -1,4 +1,5 @@
 import type { GenerationTask } from "../../types/stageFive";
+import { isGenerationTaskActive } from "../../utils/generationTask";
 
 type JsonObject = Record<string, unknown>;
 
@@ -86,7 +87,7 @@ function changedSceneFields(before: JsonObject | undefined, after: JsonObject | 
 
 function issueStatus(
   issue: JsonObject,
-  taskStatus: string,
+  taskStatus: GenerationTask["status"],
   resolvedCodes: Set<string>,
   unresolvedCodes: Set<string>,
 ): { key: IssueStatus; label: string } {
@@ -100,7 +101,7 @@ function issueStatus(
   if (unresolvedCodes.has(code)) {
     return { key: "unresolved", label: "待人工处理" };
   }
-  if (taskStatus === "queued" || taskStatus === "running") {
+  if (isGenerationTaskActive(taskStatus)) {
     return { key: "pending", label: "等待定点修订" };
   }
   return { key: "unresolved", label: "待人工处理" };
