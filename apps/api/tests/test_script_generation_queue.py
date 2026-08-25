@@ -26,7 +26,7 @@ from app.providers.types import (
 from app.schemas.project import ProjectCreate
 from app.services.project_service import create_project
 from app.services.script_generation_queue_service import recover_script_generation_tasks
-from app.services.script_service import create_script_generation_task, execute_script_generation_task
+from app.scripts.service import create_script_generation_task, execute_script_generation_task
 
 
 class RecordingMockLLMProvider(MockLLMProvider):
@@ -160,7 +160,7 @@ class ScriptGenerationQueueTests(unittest.TestCase):
         provider = RecordingMockLLMProvider()
         with self.session_factory() as db:
             project = self._project(db)
-            with patch("app.services.script_service.provider_registry.get", return_value=provider):
+            with patch("app.scripts.service.provider_registry.get", return_value=provider):
                 task = create_script_generation_task(db, project.id)
 
             self.assertEqual(task.status, "queued")
@@ -170,7 +170,7 @@ class ScriptGenerationQueueTests(unittest.TestCase):
                 task.raw_response["checkpoint"]["pipeline_version"],
                 SCRIPT_QUALITY_PIPELINE_VERSION,
             )
-            with patch("app.services.script_service.provider_registry.get", return_value=provider):
+            with patch("app.scripts.service.provider_registry.get", return_value=provider):
                 with self.assertRaises(HTTPException) as duplicate:
                     create_script_generation_task(db, project.id)
             self.assertEqual(duplicate.exception.status_code, 409)
@@ -179,7 +179,7 @@ class ScriptGenerationQueueTests(unittest.TestCase):
         provider = RecordingMockLLMProvider()
         with self.session_factory() as db:
             project = self._project(db)
-            with patch("app.services.script_service.provider_registry.get", return_value=provider):
+            with patch("app.scripts.service.provider_registry.get", return_value=provider):
                 task = create_script_generation_task(db, project.id)
                 task.raw_response = {
                     "checkpoint": {
@@ -257,7 +257,7 @@ class ScriptGenerationQueueTests(unittest.TestCase):
         provider = RecordingMockLLMProvider()
         with self.session_factory() as db:
             project = self._project(db)
-            with patch("app.services.script_service.provider_registry.get", return_value=provider):
+            with patch("app.scripts.service.provider_registry.get", return_value=provider):
                 task = create_script_generation_task(db, project.id)
             task.status = "running"
             task.lease_owner = "stopped-worker"
@@ -314,7 +314,7 @@ class ScriptGenerationQueueTests(unittest.TestCase):
         }
         with self.session_factory() as db:
             project = self._project(db)
-            with patch("app.services.script_service.provider_registry.get", return_value=provider):
+            with patch("app.scripts.service.provider_registry.get", return_value=provider):
                 task = create_script_generation_task(db, project.id)
             task.raw_response = {
                 "checkpoint": {
@@ -367,7 +367,7 @@ class ScriptGenerationQueueTests(unittest.TestCase):
             }
             db.add(task)
             db.commit()
-            with patch("app.services.script_service.provider_registry.get", return_value=provider):
+            with patch("app.scripts.service.provider_registry.get", return_value=provider):
                 script, completed = execute_script_generation_task(db, task.id)
 
             self.assertEqual(provider.phases, [])
@@ -379,7 +379,7 @@ class ScriptGenerationQueueTests(unittest.TestCase):
         provider = RetryOnceDraftProvider()
         with self.session_factory() as db:
             project = self._project(db)
-            with patch("app.services.script_service.provider_registry.get", return_value=provider):
+            with patch("app.scripts.service.provider_registry.get", return_value=provider):
                 task = create_script_generation_task(db, project.id)
                 with self.assertRaises(TaskExecutionError) as raised:
                     execute_script_generation_task(db, task.id)
@@ -399,7 +399,7 @@ class ScriptGenerationQueueTests(unittest.TestCase):
             self.assertEqual(task.status, "queued")
             self.assertEqual(task.retry_count, 1)
 
-            with patch("app.services.script_service.provider_registry.get", return_value=provider):
+            with patch("app.scripts.service.provider_registry.get", return_value=provider):
                 _script, completed = execute_script_generation_task(db, task.id)
 
             self.assertEqual(completed.status, "succeeded")
@@ -410,7 +410,7 @@ class ScriptGenerationQueueTests(unittest.TestCase):
         provider = RecordingMockLLMProvider()
         with self.session_factory() as db:
             project = self._project(db)
-            with patch("app.services.script_service.provider_registry.get", return_value=provider):
+            with patch("app.scripts.service.provider_registry.get", return_value=provider):
                 task = create_script_generation_task(db, project.id)
             task.status = "running"
             task.raw_response = {
@@ -427,7 +427,7 @@ class ScriptGenerationQueueTests(unittest.TestCase):
             db.add(task)
             db.commit()
 
-            with patch("app.services.script_service.provider_registry.get", return_value=provider):
+            with patch("app.scripts.service.provider_registry.get", return_value=provider):
                 with self.assertRaises(ScriptPipelineFailure):
                     execute_script_generation_task(db, task.id)
 
@@ -468,7 +468,7 @@ class ScriptGenerationQueueTests(unittest.TestCase):
             db.commit()
             providers = {writer.name: writer, reviewer.name: reviewer}
             with patch(
-                "app.services.script_service.provider_registry.get",
+                "app.scripts.service.provider_registry.get",
                 side_effect=lambda _type, name: providers[name],
             ):
                 task = create_script_generation_task(db, project.id)
@@ -483,7 +483,7 @@ class ScriptGenerationQueueTests(unittest.TestCase):
         provider = ReviewUnavailableProvider()
         with self.session_factory() as db:
             project = self._project(db)
-            with patch("app.services.script_service.provider_registry.get", return_value=provider):
+            with patch("app.scripts.service.provider_registry.get", return_value=provider):
                 task = create_script_generation_task(db, project.id)
                 script, completed = execute_script_generation_task(db, task.id)
 
@@ -504,7 +504,7 @@ class ScriptGenerationQueueTests(unittest.TestCase):
         provider = InvalidPatchProvider()
         with self.session_factory() as db:
             project = self._project(db)
-            with patch("app.services.script_service.provider_registry.get", return_value=provider):
+            with patch("app.scripts.service.provider_registry.get", return_value=provider):
                 task = create_script_generation_task(db, project.id)
                 script, completed = execute_script_generation_task(db, task.id)
 
@@ -520,7 +520,7 @@ class ScriptGenerationQueueTests(unittest.TestCase):
         provider = InvalidDraftProvider()
         with self.session_factory() as db:
             project = self._project(db)
-            with patch("app.services.script_service.provider_registry.get", return_value=provider):
+            with patch("app.scripts.service.provider_registry.get", return_value=provider):
                 task = create_script_generation_task(db, project.id)
                 with self.assertRaises(ScriptPipelineFailure):
                     execute_script_generation_task(db, task.id)
@@ -530,7 +530,11 @@ class ScriptGenerationQueueTests(unittest.TestCase):
             self.assertEqual(task.error_code, "script_generation_parse_failed")
             self.assertEqual(provider.phases, ["story_blueprint", "script_draft", "structure_recovery"])
 
-            retry = TaskRepository().retry(db, task).task
+            retry = TaskRepository().retry(
+                db,
+                task,
+                allowed_task_types={"script_generation"},
+            ).task
             self.assertNotIn(
                 "structure_recovery",
                 retry.raw_response["checkpoint"]["responses"],

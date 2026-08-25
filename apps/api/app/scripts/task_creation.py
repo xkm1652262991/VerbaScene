@@ -1,7 +1,7 @@
 from sqlalchemy.orm import Session
 
 from app.models import GenerationTask
-from app.services.script_service import create_script_generation_task as _create_task
+from app.scripts.service import create_script_generation_task as _create_task
 
 
 def create_script_generation_task(

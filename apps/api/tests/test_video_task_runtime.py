@@ -18,6 +18,7 @@ from app.production.video_tasks import (
     create_project_video_batch_task,
     create_video_candidate_task,
 )
+from app.production.contracts import VIDEO_CANDIDATE_TASK_TYPE
 from app.providers.base import ProviderAdapter
 from app.providers.types import (
     ProviderAsset,
@@ -27,7 +28,6 @@ from app.providers.types import (
     ProviderStatus,
     ProviderType,
 )
-from app.services.video_generation_service import VIDEO_CANDIDATE_TASK_TYPE
 
 
 class AsyncVideoProvider(ProviderAdapter):
@@ -143,7 +143,7 @@ class VideoTaskRuntimeTests(unittest.TestCase):
         provider = AsyncVideoProvider()
         _project_id, shot_ids = self._project_with_shots()
         with self.session_factory() as db, patch(
-            "app.services.video_generation_service.provider_registry.get",
+            "app.production.video_request_compiler.provider_registry.get",
             return_value=provider,
         ):
             task = create_video_candidate_task(db, shot_ids[0], duration_sec=Decimal("4"))
@@ -210,7 +210,7 @@ class VideoTaskRuntimeTests(unittest.TestCase):
         with (
             patch("app.production.video_task_handler.SessionLocal", self.session_factory),
             patch("app.production.video_task_handler.provider_registry.get", return_value=provider),
-            patch("app.services.video_generation_service.provider_registry.get", return_value=provider),
+            patch("app.production.video_request_compiler.provider_registry.get", return_value=provider),
         ):
             handler.execute(task_id)
 
@@ -229,13 +229,13 @@ class VideoTaskRuntimeTests(unittest.TestCase):
         provider = AsyncVideoProvider()
         project_id, shot_ids = self._project_with_shots(2)
         with self.session_factory() as db, patch(
-            "app.services.video_generation_service.provider_registry.get",
+            "app.production.video_request_compiler.provider_registry.get",
             return_value=provider,
         ):
             active = create_video_candidate_task(db, shot_ids[0], update_shot=False)
 
         with self.session_factory() as db, patch(
-            "app.services.video_generation_service.provider_registry.get",
+            "app.production.video_request_compiler.provider_registry.get",
             return_value=provider,
         ):
             with self.assertRaises(HTTPException) as raised:
@@ -256,7 +256,7 @@ class VideoTaskRuntimeTests(unittest.TestCase):
         provider = AsyncVideoProvider()
         _project_id, shot_ids = self._project_with_shots()
         with self.session_factory() as db, patch(
-            "app.services.video_generation_service.provider_registry.get",
+            "app.production.video_request_compiler.provider_registry.get",
             return_value=provider,
         ):
             task = create_video_candidate_task(db, shot_ids[0], update_shot=False)
@@ -281,7 +281,7 @@ class VideoTaskRuntimeTests(unittest.TestCase):
         project_id, _shot_ids = self._project_with_shots(2)
         repository = TaskRepository()
         with self.session_factory() as db, patch(
-            "app.services.video_generation_service.provider_registry.get",
+            "app.production.video_request_compiler.provider_registry.get",
             return_value=provider,
         ):
             parent = create_project_video_batch_task(db, project_id)
@@ -310,9 +310,17 @@ class VideoTaskRuntimeTests(unittest.TestCase):
             self.assertEqual(parent.status, TaskStatus.FAILED.value)
 
             with self.assertRaises(TaskConflictError):
-                repository.retry(db, parent)
+                repository.retry(
+                    db,
+                    parent,
+                    allowed_task_types={PROJECT_VIDEO_BATCH_TASK_TYPE, VIDEO_CANDIDATE_TASK_TYPE},
+                )
 
-            retry = repository.retry(db, children[1]).task
+            retry = repository.retry(
+                db,
+                children[1],
+                allowed_task_types={VIDEO_CANDIDATE_TASK_TYPE},
+            ).task
             repository.finish(
                 db,
                 retry,
@@ -332,7 +340,7 @@ class VideoTaskRuntimeTests(unittest.TestCase):
         project_id, _shot_ids = self._project_with_shots(2)
         repository = TaskRepository()
         with self.session_factory() as db, patch(
-            "app.services.video_generation_service.provider_registry.get",
+            "app.production.video_request_compiler.provider_registry.get",
             return_value=provider,
         ):
             parent = create_project_video_batch_task(db, project_id)

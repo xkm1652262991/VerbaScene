@@ -26,7 +26,6 @@ from app.services.project_service import (
     delete_project,
     get_project,
     get_project_deletion_preview,
-    list_projects,
     list_projects_page,
     update_project,
     upsert_project_chapter,
@@ -40,7 +39,7 @@ from app.services.pre_image_service import build_project_prompt_previews
 from app.services.patch_pipeline_service import analyze_patch_impact
 from app.services.quality_service import list_quality_checks
 from app.services.readiness_service import get_project_readiness
-from app.services.script_service import get_latest_script
+from app.scripts.service import get_latest_script
 from app.services.shot_frame_service import list_shot_frame_images, list_shot_frame_prompts
 from app.services.shot_service import list_shots
 from app.services.stage_run_service import list_project_stage_runs

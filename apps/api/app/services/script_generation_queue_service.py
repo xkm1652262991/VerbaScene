@@ -9,7 +9,7 @@ from sqlalchemy.orm import Session
 from app.models import GenerationTask
 from app.platform.tasks.defaults import configure_default_task_runtime
 from app.platform.tasks.repository import TaskRepository
-from app.services.script_service import SCRIPT_GENERATION_TASK_TYPE
+from app.scripts.contracts import SCRIPT_GENERATION_TASK_TYPE
 
 
 def start_script_generation_queue() -> None:

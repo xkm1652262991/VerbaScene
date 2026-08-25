@@ -32,7 +32,7 @@ from app.services.dialogue_service import save_dialogues
 from app.services.entity_service import generate_entities
 from app.services.asset_resolver_service import resolve_generation_assets
 from app.services.project_service import create_project
-from app.services.script_service import generate_script_now
+from app.scripts.service import generate_script_now
 from app.services.shot_service import (
     compile_shot_video_prompt,
     generate_shots,
@@ -171,7 +171,7 @@ class AnimationEnglishWorkflowTests(unittest.TestCase):
                 ),
             )
             with (
-                patch("app.services.script_service.provider_registry.get", return_value=provider),
+                patch("app.scripts.service.provider_registry.get", return_value=provider),
                 patch("app.services.entity_service.provider_registry.get", return_value=provider),
                 patch("app.services.shot_service.provider_registry.get", return_value=provider),
             ):
@@ -258,7 +258,7 @@ class AnimationEnglishWorkflowTests(unittest.TestCase):
                     outline="Mia asks Leo to help put red blocks in a box.",
                 ),
             )
-            with patch("app.services.script_service.provider_registry.get", return_value=provider):
+            with patch("app.scripts.service.provider_registry.get", return_value=provider):
                 script, task = generate_script_now(db, project.id)
 
             self.assertEqual(

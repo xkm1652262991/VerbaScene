@@ -18,6 +18,7 @@ from app.platform.tasks.types import (
     TaskLane,
     TaskStatus,
 )
+from app.services.task_command_service import retry_task
 
 
 class UnifiedTaskRepositoryTests(unittest.TestCase):
@@ -195,12 +196,47 @@ class UnifiedTaskRepositoryTests(unittest.TestCase):
             self.assertEqual(task.status, TaskStatus.CANCELLED.value)
             self.assertIsNone(task.active_dedupe_key)
 
-            retry = repository.retry(db, task).task
+            retry = repository.retry(
+                db,
+                task,
+                allowed_task_types={"script_generation"},
+            ).task
             db.commit()
             self.assertEqual(retry.status, TaskStatus.QUEUED.value)
             self.assertEqual(retry.retry_of_task_id, task.id)
             self.assertEqual(retry.input_payload, task.input_payload)
             self.assertIsNotNone(retry.active_dedupe_key)
+
+    def test_manual_retry_rejects_task_types_without_a_runtime_handler(self):
+        repository = TaskRepository()
+        with self.session_factory() as db:
+            task = repository.create(
+                db,
+                project_id=self.project_id,
+                task_type="reference_image_generation",
+                resource_key="project:images",
+                input_payload={"snapshot": True},
+            ).task
+            repository.finish(
+                db,
+                task,
+                status=TaskStatus.FAILED,
+                progress_label="failed",
+                error_code="test_failure",
+                error_message="test failure",
+            )
+            db.commit()
+
+            with self.assertRaisesRegex(
+                TaskConflictError,
+                "does not support manual retry",
+            ):
+                retry_task(db, task)
+
+            self.assertEqual(
+                len(list(db.scalars(select(GenerationTask)).all())),
+                1,
+            )
 
     def test_idle_waiting_provider_task_is_claimed_for_cancellation(self):
         repository = TaskRepository()

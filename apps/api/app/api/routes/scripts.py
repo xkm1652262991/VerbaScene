@@ -7,7 +7,7 @@ from app.schemas.script import ScriptRead, ScriptUpdate
 from app.schemas.task import GenerationTaskRead
 from app.platform.tasks.runtime import get_task_runtime
 from app.scripts.task_creation import create_script_generation_task
-from app.services.script_service import (
+from app.scripts.service import (
     get_latest_script,
     update_script,
 )

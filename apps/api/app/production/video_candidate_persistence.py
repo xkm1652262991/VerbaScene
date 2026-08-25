@@ -1,14 +1,22 @@
 from datetime import datetime, timezone
+from uuid import uuid4
 
+from fastapi import HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.models import Asset, AssetCandidate, GenerationTask, Shot
-from app.providers.types import ProviderResponse
+from app.providers.types import ProviderResponse, ProviderStatus
 from app.services.asset_candidate_service import promote_asset_candidate
-from app.services.media_generation_support import sanitize_large_payload
+from app.services.asset_repository import (
+    asset_source_context,
+    infer_asset_role,
+    next_candidate_version,
+    resolve_source_stage_run_id,
+)
+from app.services.media_generation_support import sanitize_large_payload, with_avd_asset_usage
+from app.services.media_storage_service import materialize_data_uri
 from app.services.task_service import mark_task_succeeded
-from app.services.video_generation_service import _persist_provider_video_candidate
 from app.services.workflow_state_service import (
     mark_downstream_stages_pending,
     mark_stage_approved,
@@ -30,7 +38,7 @@ def persist_video_candidate_task_result(
     shot = db.get(Shot, shot_id)
     if shot is None:
         raise ValueError("Video task shot no longer exists")
-    candidate = _persist_provider_video_candidate(
+    candidate = persist_provider_video_candidate(
         db,
         project_id=task.project_id,
         entity_type="shot",
@@ -137,4 +145,103 @@ def persist_video_candidate_task_result(
     db.commit()
     db.refresh(candidate)
     db.refresh(task)
+    return candidate
+
+
+def persist_provider_video_candidate(
+    db: Session,
+    *,
+    project_id: str,
+    entity_type: str,
+    entity_id: str,
+    provider_name: str,
+    model: str,
+    prompt: str,
+    negative_prompt: str | None,
+    response: ProviderResponse,
+    source_task_id: str | None = None,
+    request_metadata: dict | None = None,
+) -> AssetCandidate:
+    if response.status != ProviderStatus.SUCCEEDED or not response.assets:
+        if response.error:
+            detail = {
+                "message": response.error.error_message,
+                "code": response.error.error_code,
+                "provider": provider_name,
+                "model": model,
+                "retryable": response.error.is_retryable,
+            }
+        else:
+            detail = {
+                "message": "Video provider failed",
+                "code": "video_provider_failed",
+                "provider": provider_name,
+                "model": model,
+            }
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=detail)
+
+    provider_asset = response.assets[0]
+    resolved_asset_role = infer_asset_role(
+        asset_type="video",
+        entity_type=entity_type,
+        entity_id=entity_id,
+    )
+    request_metadata = with_avd_asset_usage(
+        request_metadata,
+        asset_type="video",
+        asset_role=resolved_asset_role,
+        entity_type=entity_type,
+    )
+    version = next_candidate_version(
+        db,
+        project_id,
+        "video",
+        entity_type,
+        entity_id,
+        resolved_asset_role,
+    )
+    source_script_id, source_shot_batch_id = asset_source_context(
+        db,
+        entity_type,
+        entity_id,
+    )
+    source_stage_run_id = resolve_source_stage_run_id(db, project_id, source_task_id)
+    candidate_id = str(uuid4())
+
+    candidate = AssetCandidate(
+        id=candidate_id,
+        project_id=project_id,
+        asset_type="video",
+        asset_role=resolved_asset_role,
+        entity_type=entity_type,
+        entity_id=entity_id,
+        variant_key="base" if entity_type in {"character", "scene", "prop"} else None,
+        source_task_id=source_task_id,
+        source_stage_run_id=source_stage_run_id,
+        source_script_id=source_script_id,
+        source_shot_batch_id=source_shot_batch_id,
+        candidate_type="generated",
+        version=version,
+        uri=materialize_data_uri(
+            project_id,
+            candidate_id,
+            provider_asset.uri,
+            provider_asset.mime_type,
+        ),
+        mime_type=provider_asset.mime_type,
+        width=provider_asset.width,
+        height=provider_asset.height,
+        duration_sec=provider_asset.duration_sec,
+        provider=provider_name,
+        model=model,
+        prompt=prompt,
+        negative_prompt=negative_prompt,
+        raw_response={
+            "provider_response": sanitize_large_payload(response.raw_response),
+            "request_metadata": request_metadata,
+        },
+        status="pending_review",
+    )
+    db.add(candidate)
+    db.flush()
     return candidate

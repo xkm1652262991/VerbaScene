@@ -13,13 +13,13 @@ from app.platform.tasks.repository import (
     active_dedupe_key,
 )
 from app.platform.tasks.types import TaskStatus
+from app.production.contracts import (
+    PROJECT_VIDEO_BATCH_TASK_TYPE,
+    VIDEO_CANDIDATE_TASK_TYPE,
+)
 from app.production.video_request_compiler import compile_video_candidate_task_input
 from app.services.asset_repository import get_project_or_404
-from app.services.video_generation_service import VIDEO_CANDIDATE_TASK_TYPE
 from app.services.workflow_state_service import mark_stage_running
-
-
-PROJECT_VIDEO_BATCH_TASK_TYPE = "project_video_candidate_batch"
 
 
 def create_video_candidate_task(

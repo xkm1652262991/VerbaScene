@@ -34,7 +34,7 @@ from app.services.image_generation_service import (
     regenerate_image_candidate_from_candidate,
 )
 
-from app.services.video_generation_service import (
+from app.production.legacy_video_generation import (
     generate_shot_videos,
     generate_shot_video_candidates,
     generate_single_shot_video,

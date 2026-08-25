@@ -11,7 +11,7 @@ from app.db.session import create_database_engine, initialize_database
 from app.models import Asset, GenerationTask, Project, Shot
 from app.providers.mock import MockVideoProvider
 from app.agents.video_generation import shot_video_prompt
-from app.services.asset_service import (
+from app.production.legacy_video_generation import (
     create_single_shot_video_candidate_task,
     execute_single_shot_video_candidate_task,
 )
@@ -91,7 +91,7 @@ class VideoGenerationQueueTests(unittest.TestCase):
             db.commit()
 
             with (
-                patch("app.services.video_generation_service.provider_registry.get", return_value=limited_provider),
+                patch("app.production.legacy_video_generation.provider_registry.get", return_value=limited_provider),
                 self.assertRaises(HTTPException) as raised,
             ):
                 create_single_shot_video_candidate_task(db, shot.id)
@@ -118,7 +118,7 @@ class VideoGenerationQueueTests(unittest.TestCase):
         with self.session_factory() as db:
             shot = self._approved_shot(db)
             self.assertIsNone(shot.duration_sec)
-            with patch("app.services.video_generation_service.provider_registry.get", return_value=provider):
+            with patch("app.production.legacy_video_generation.provider_registry.get", return_value=provider):
                 task = create_single_shot_video_candidate_task(db, shot.id)
                 result = execute_single_shot_video_candidate_task(db, task.id)
 

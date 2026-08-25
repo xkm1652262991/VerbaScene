@@ -3,10 +3,22 @@ from sqlalchemy.orm import Session
 from app.models import GenerationTask
 from app.platform.tasks.repository import TaskCreateResult, TaskRepository
 from app.platform.tasks.types import TaskStatus
-from app.services.script_service import SCRIPT_GENERATION_TASK_TYPE
+from app.production.contracts import (
+    MANUALLY_RETRYABLE_VIDEO_TASK_TYPES,
+    VIDEO_CANDIDATE_TASK_TYPE,
+)
+from app.scripts.contracts import (
+    MANUALLY_RETRYABLE_SCRIPT_TASK_TYPES,
+    SCRIPT_GENERATION_TASK_TYPE,
+)
 from app.services.stage_run_service import finish_latest_stage_run
-from app.services.video_generation_service import VIDEO_CANDIDATE_TASK_TYPE
 from app.services.workflow_state_service import mark_stage_running
+
+
+MANUALLY_RETRYABLE_TASK_TYPES = (
+    MANUALLY_RETRYABLE_SCRIPT_TASK_TYPES
+    | MANUALLY_RETRYABLE_VIDEO_TASK_TYPES
+)
 
 
 def request_task_cancel(db: Session, task: GenerationTask) -> GenerationTask:
@@ -37,7 +49,11 @@ def request_task_cancel(db: Session, task: GenerationTask) -> GenerationTask:
 
 
 def retry_task(db: Session, source: GenerationTask) -> TaskCreateResult:
-    result = TaskRepository().retry(db, source)
+    result = TaskRepository().retry(
+        db,
+        source,
+        allowed_task_types=MANUALLY_RETRYABLE_TASK_TYPES,
+    )
     if not result.created:
         return result
     if source.task_type == VIDEO_CANDIDATE_TASK_TYPE:

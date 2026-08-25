@@ -1,9 +1,9 @@
 from threading import Lock
 
 from app.platform.tasks.runtime import LocalTaskRuntime, get_task_runtime
+from app.production.contracts import PROJECT_VIDEO_BATCH_TASK_TYPE
 from app.production.video_task_handler import VideoCandidateTaskHandler
 from app.production.video_batch_coordinator import reconcile_project_video_batch
-from app.production.video_tasks import PROJECT_VIDEO_BATCH_TASK_TYPE
 from app.scripts.task_handler import ScriptGenerationTaskHandler
 
 

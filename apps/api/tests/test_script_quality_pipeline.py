@@ -26,7 +26,7 @@ from app.agents.script_screenplay import parse_screenplay_response
 from app.agents.prompt_engineering import build_shot_video_prompt
 from app.schemas.dialogue import DialogueInput
 from app.schemas.script import ScriptUpdate
-from app.services.script_service import _synchronize_script
+from app.scripts.service import _synchronize_script
 
 
 class ScriptQualityPipelineTests(unittest.TestCase):

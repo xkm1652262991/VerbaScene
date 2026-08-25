@@ -6,6 +6,11 @@ from pathlib import Path
 API_ROOT = Path(__file__).resolve().parents[1]
 APP_ROOT = API_ROOT / "app"
 SERVICES_ROOT = APP_ROOT / "services"
+COMPATIBILITY_FACADES = {
+    "app.services.asset_service": SERVICES_ROOT / "asset_service.py",
+    "app.services.script_service": SERVICES_ROOT / "script_service.py",
+    "app.services.video_generation_service": SERVICES_ROOT / "video_generation_service.py",
+}
 
 
 def _tree(path: Path) -> ast.Module:
@@ -23,36 +28,44 @@ def _service_imports(path: Path) -> set[str]:
 
 
 class AssetServiceArchitectureTests(unittest.TestCase):
-    def test_compatibility_facade_contains_no_business_definitions(self):
-        facade = _tree(SERVICES_ROOT / "asset_service.py")
-        definitions = [
-            node
-            for node in facade.body
-            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))
-        ]
-        self.assertEqual(definitions, [])
+    def test_compatibility_facades_contain_no_business_definitions(self):
+        for module, path in COMPATIBILITY_FACADES.items():
+            with self.subTest(module=module):
+                definitions = [
+                    node
+                    for node in _tree(path).body
+                    if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))
+                ]
+                self.assertEqual(definitions, [])
 
-    def test_internal_application_code_does_not_depend_on_facade(self):
+    def test_internal_application_code_does_not_depend_on_compatibility_facades(self):
         offenders: list[str] = []
         for path in APP_ROOT.rglob("*.py"):
-            if path == SERVICES_ROOT / "asset_service.py":
+            if path in COMPATIBILITY_FACADES.values():
                 continue
-            if "app.services.asset_service" in _service_imports(path):
-                offenders.append(str(path.relative_to(API_ROOT)))
+            imported_facades = sorted(
+                module
+                for module in COMPATIBILITY_FACADES
+                if module in _service_imports(path)
+            )
+            if imported_facades:
+                offenders.append(
+                    f"{path.relative_to(API_ROOT)} -> {', '.join(imported_facades)}"
+                )
         self.assertEqual(offenders, [])
 
-    def test_services_do_not_import_private_cross_module_helpers(self):
+    def test_application_modules_do_not_import_private_cross_module_helpers(self):
         offenders: list[str] = []
-        for path in SERVICES_ROOT.glob("*.py"):
-            for node in _tree(path).body:
+        for path in APP_ROOT.rglob("*.py"):
+            for node in ast.walk(_tree(path)):
                 if not isinstance(node, ast.ImportFrom):
                     continue
-                if not isinstance(node.module, str) or not node.module.startswith("app.services."):
+                if not isinstance(node.module, str) or not node.module.startswith("app."):
                     continue
                 private_names = [alias.name for alias in node.names if alias.name.startswith("_")]
                 if private_names:
                     offenders.append(
-                        f"{path.name}: {node.module} -> {', '.join(private_names)}"
+                        f"{path.relative_to(API_ROOT)}: {node.module} -> {', '.join(private_names)}"
                     )
         self.assertEqual(offenders, [])
 

@@ -314,7 +314,19 @@ class TaskRepository:
             db.flush()
         return task
 
-    def retry(self, db: Session, source: GenerationTask) -> TaskCreateResult:
+    def retry(
+        self,
+        db: Session,
+        source: GenerationTask,
+        *,
+        allowed_task_types: Iterable[str],
+    ) -> TaskCreateResult:
+        allowed = frozenset(allowed_task_types)
+        if source.task_type not in allowed:
+            raise TaskConflictError(
+                f"Task type does not support manual retry: {source.task_type}",
+                task_id=source.id,
+            )
         if source.status not in {TaskStatus.FAILED.value, TaskStatus.CANCELLED.value}:
             raise TaskConflictError("Only failed or cancelled tasks can be retried", task_id=source.id)
         if source.task_type == "project_video_candidate_batch":

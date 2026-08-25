@@ -11,11 +11,11 @@ from app.platform.media import get_media_store
 from app.platform.tasks.types import SubmissionState, TaskExecutionError, TaskLane, TaskStatus
 from app.providers.defaults import provider_registry
 from app.providers.types import ProviderExecutionMode, ProviderResponse, ProviderStatus, ProviderType
+from app.production.contracts import VIDEO_CANDIDATE_TASK_TYPE
 from app.production.video_candidate_persistence import persist_video_candidate_task_result
 from app.production.video_request_compiler import compile_video_candidate_task_input
 from app.services.media_generation_support import sanitize_large_payload
 from app.services.stage_run_service import finish_latest_stage_run
-from app.services.video_generation_service import VIDEO_CANDIDATE_TASK_TYPE
 from app.services.workflow_state_service import mark_stage_failed
 from app.production.video_provider_executor import (
     fetch_provider_result,

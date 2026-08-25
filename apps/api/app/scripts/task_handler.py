@@ -1,6 +1,7 @@
 from app.db import SessionLocal
 from app.platform.tasks.types import TaskLane
-from app.services.script_service import SCRIPT_GENERATION_TASK_TYPE, execute_script_generation_task
+from app.scripts.contracts import SCRIPT_GENERATION_TASK_TYPE
+from app.scripts.service import execute_script_generation_task
 
 
 class ScriptGenerationTaskHandler:
