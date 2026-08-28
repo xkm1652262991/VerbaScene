@@ -48,12 +48,14 @@
 - `asset_repository.py`：资产查询、当前链过滤、版本号和来源追踪。
 - `media_storage_service.py`：本地媒体路径、Data URI 落盘和文件清理。
 - `media_generation_support.py`：图片和视频共用的任务、进度、审计和错误归一化。
-- `asset_lifecycle_service.py`：上传、选择、删除、抽帧和采用后副作用。
-- `image_generation_service.py` 与 `video_generation_service.py`：分别拥有各自的 Provider 编排、重生成和结果持久化。
+- `asset_lifecycle_service.py`：上传、选择、删除和采用后副作用；同步 helper 只供测试与维护脚本使用。
+- `image_generation_service.py`：保留图片请求编译和候选持久化；公开 HTTP 入口由 `assets/image_tasks.py` 创建后台任务。
+- `assets/frame_extraction_tasks.py`：冻结源视频与时间点，通过单并发媒体通道执行 FFmpeg 截帧。
+- `video_generation_service.py`：保留兼容入口；视频任务由 production 模块执行 Provider 编排和结果持久化。
 - `asset_candidate_service.py` 与 `asset_resolver_service.py`：继续独立负责候选版本和生成引用解析。
 
 `asset_service.py` 只是兼容旧导入路径的薄门面，不实现业务函数。项目内部调用方必须直接依赖实际拥有者，不得从其他服务导入下划线私有函数。
 
 依赖方向固定为：存储/仓储/任务支持 → 资产生命周期和图片/视频生成 → API 路由与队列。图片与视频生成模块不相互导入，也不依赖兼容门面或候选服务。
 
-入口服务保持现有事务边界；底层 repository 和 storage 辅助函数不主动 `commit`。本拆分不改变 HTTP 合同、数据库结构、Provider 参数、候选优先或历史版本保留规则。
+入口服务与任务 Handler 明确拥有短事务；Provider 调用、下载和 FFmpeg 子进程期间不得持有事务，底层 repository 和 storage 辅助函数不主动 `commit`。图片、截帧和导出 HTTP 合同改为 `202 + GenerationTask`，但不改变数据库结构、Provider 参数、候选优先或历史版本保留规则。

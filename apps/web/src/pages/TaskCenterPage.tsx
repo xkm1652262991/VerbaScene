@@ -34,8 +34,13 @@ const TASK_TYPE_FILTERS = [
   { id: "all", label: "全部类型" },
   { id: "script_generation", label: "剧本生成" },
   { id: "shot_breakdown", label: "分镜导演" },
+  { id: "image_candidate_generation", label: "图片生成" },
+  { id: "reference_image_candidate_batch", label: "角色场景图片批次" },
+  { id: "shot_image_candidate_batch", label: "分镜图片批次" },
   { id: "shot_video_candidate_generation", label: "镜头视频" },
   { id: "project_video_candidate_batch", label: "视频批次" },
+  { id: "video_frame_extraction", label: "视频截帧" },
+  { id: "project_export", label: "成片导出" },
 ] as const;
 
 type TaskStatusFilter = (typeof TASK_STATUS_FILTERS)[number]["id"];

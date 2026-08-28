@@ -32,5 +32,6 @@ def reconcile_project_video_batch(db: Session, parent: GenerationTask) -> None:
             parent.project_id,
             "videos",
             summary="项目视频批次存在失败或取消的子任务",
+            task_id=parent.id,
             error_code=parent.error_code or "batch_children_incomplete",
         )

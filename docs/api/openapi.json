@@ -397,23 +397,6 @@
         "title": "ApiResponse[AgentConfigRead]",
         "type": "object"
       },
-      "ApiResponse_AssetCandidateGenerationResponse_": {
-        "properties": {
-          "data": {
-            "$ref": "#/components/schemas/AssetCandidateGenerationResponse"
-          },
-          "success": {
-            "default": true,
-            "title": "Success",
-            "type": "boolean"
-          }
-        },
-        "required": [
-          "data"
-        ],
-        "title": "ApiResponse[AssetCandidateGenerationResponse]",
-        "type": "object"
-      },
       "ApiResponse_AssetCandidateRead_": {
         "properties": {
           "data": {
@@ -463,23 +446,6 @@
           "data"
         ],
         "title": "ApiResponse[CharacterRead]",
-        "type": "object"
-      },
-      "ApiResponse_CompositionResponse_": {
-        "properties": {
-          "data": {
-            "$ref": "#/components/schemas/CompositionResponse"
-          },
-          "success": {
-            "default": true,
-            "title": "Success",
-            "type": "boolean"
-          }
-        },
-        "required": [
-          "data"
-        ],
-        "title": "ApiResponse[CompositionResponse]",
         "type": "object"
       },
       "ApiResponse_DialogueSaveResponse_": {
@@ -805,31 +771,6 @@
         "title": "ApiResponse[ShotVideoPromptPreviewRead]",
         "type": "object"
       },
-      "ApiResponse_Union_AssetCandidateGenerationResponse__GenerationTaskRead__": {
-        "properties": {
-          "data": {
-            "anyOf": [
-              {
-                "$ref": "#/components/schemas/AssetCandidateGenerationResponse"
-              },
-              {
-                "$ref": "#/components/schemas/GenerationTaskRead"
-              }
-            ],
-            "title": "Data"
-          },
-          "success": {
-            "default": true,
-            "title": "Success",
-            "type": "boolean"
-          }
-        },
-        "required": [
-          "data"
-        ],
-        "title": "ApiResponse[Union[AssetCandidateGenerationResponse, GenerationTaskRead]]",
-        "type": "object"
-      },
       "ApiResponse_dict_": {
         "properties": {
           "data": {
@@ -1129,27 +1070,6 @@
           "uri"
         ],
         "title": "AssetCandidateCreate",
-        "type": "object"
-      },
-      "AssetCandidateGenerationResponse": {
-        "properties": {
-          "candidates": {
-            "items": {
-              "$ref": "#/components/schemas/AssetCandidateRead"
-            },
-            "title": "Candidates",
-            "type": "array"
-          },
-          "task_id": {
-            "title": "Task Id",
-            "type": "string"
-          }
-        },
-        "required": [
-          "candidates",
-          "task_id"
-        ],
-        "title": "AssetCandidateGenerationResponse",
         "type": "object"
       },
       "AssetCandidateRead": {
@@ -2262,22 +2182,6 @@
           }
         },
         "title": "CompositionRequest",
-        "type": "object"
-      },
-      "CompositionResponse": {
-        "properties": {
-          "asset": {
-            "$ref": "#/components/schemas/AssetRead"
-          },
-          "export": {
-            "$ref": "#/components/schemas/ExportRead"
-          }
-        },
-        "required": [
-          "export",
-          "asset"
-        ],
-        "title": "CompositionResponse",
         "type": "object"
       },
       "CreativeSettings": {
@@ -7764,11 +7668,11 @@
           }
         ],
         "responses": {
-          "200": {
+          "202": {
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ApiResponse_Union_AssetCandidateGenerationResponse__GenerationTaskRead__"
+                  "$ref": "#/components/schemas/ApiResponse_GenerationTaskRead_"
                 }
               }
             },
@@ -8028,14 +7932,30 @@
               "title": "Time Sec",
               "type": "number"
             }
+          },
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Idempotency-Key"
+            }
           }
         ],
         "responses": {
-          "200": {
+          "202": {
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ApiResponse_AssetCandidateGenerationResponse_"
+                  "$ref": "#/components/schemas/ApiResponse_GenerationTaskRead_"
                 }
               }
             },
@@ -8207,14 +8127,30 @@
               ],
               "title": "Image Provider Profile Id"
             }
+          },
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Idempotency-Key"
+            }
           }
         ],
         "responses": {
-          "200": {
+          "202": {
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ApiResponse_AssetCandidateGenerationResponse_"
+                  "$ref": "#/components/schemas/ApiResponse_GenerationTaskRead_"
                 }
               }
             },
@@ -9748,6 +9684,22 @@
               "title": "Project Id",
               "type": "string"
             }
+          },
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Idempotency-Key"
+            }
           }
         ],
         "requestBody": {
@@ -9768,11 +9720,11 @@
           }
         },
         "responses": {
-          "200": {
+          "202": {
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ApiResponse_CompositionResponse_"
+                  "$ref": "#/components/schemas/ApiResponse_GenerationTaskRead_"
                 }
               }
             },
@@ -11101,14 +11053,30 @@
               ],
               "title": "Image Provider Profile Id"
             }
+          },
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Idempotency-Key"
+            }
           }
         ],
         "responses": {
-          "200": {
+          "202": {
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ApiResponse_AssetCandidateGenerationResponse_"
+                  "$ref": "#/components/schemas/ApiResponse_GenerationTaskRead_"
                 }
               }
             },
@@ -11199,14 +11167,30 @@
               ],
               "title": "Image Provider Profile Id"
             }
+          },
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Idempotency-Key"
+            }
           }
         ],
         "responses": {
-          "200": {
+          "202": {
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ApiResponse_AssetCandidateGenerationResponse_"
+                  "$ref": "#/components/schemas/ApiResponse_GenerationTaskRead_"
                 }
               }
             },
@@ -11905,14 +11889,30 @@
               ],
               "title": "Image Provider Profile Id"
             }
+          },
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Idempotency-Key"
+            }
           }
         ],
         "responses": {
-          "200": {
+          "202": {
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ApiResponse_AssetCandidateGenerationResponse_"
+                  "$ref": "#/components/schemas/ApiResponse_GenerationTaskRead_"
                 }
               }
             },
@@ -14244,14 +14244,30 @@
               ],
               "title": "Image Provider Profile Id"
             }
+          },
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Idempotency-Key"
+            }
           }
         ],
         "responses": {
-          "200": {
+          "202": {
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ApiResponse_AssetCandidateGenerationResponse_"
+                  "$ref": "#/components/schemas/ApiResponse_GenerationTaskRead_"
                 }
               }
             },

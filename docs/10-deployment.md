@@ -89,12 +89,16 @@ PERSISTENCE_MODE=database .venv/bin/alembic upgrade head
 持久化部署形态。
 
 ```env
+IMAGE_GENERATION_CONCURRENCY=2
 VIDEO_GENERATION_CONCURRENCY=2
 TASK_POLL_INTERVAL_SEC=0.5
 TASK_LEASE_SEC=60
 TASK_HEARTBEAT_SEC=15
 TASK_SHUTDOWN_TIMEOUT_SEC=30
 ```
+
+图片与视频通道并发都被运行时限制为最多 2；剧本文本通道和本地媒体通道分别固定为 1。
+本地媒体通道同时承载视频截帧与成片导出，避免多个 FFmpeg 进程争抢机器资源。
 
 当前部署目标是单 API 进程。不应仅因 PostgreSQL 中有租约字段就宣称多实例生产就绪。
 

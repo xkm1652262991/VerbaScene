@@ -63,10 +63,10 @@ flowchart LR
 `succeeded / failed / cancelled` 为终态。Worker 通过条件更新原子领取任务，
 并写入 `lease_owner / lease_expires_at / heartbeat_at`。服务只恢复租约过期的任务。
 
-`active_dedupe_key` 在数据库级阻止同一项目剧本或同一镜头视频重复提交；终态时清空。
-`Idempotency-Key` 按项目和任务类型返回原任务。剧本并发固定为 1，视频并发最高为 2。
+`active_dedupe_key` 在数据库级阻止同一业务资源重复提交；终态时清空。
+`Idempotency-Key` 按项目和任务类型返回原任务。剧本和本地媒体并发固定为 1，图片与视频并发分别最高为 2。
 
-### 剧本与视频恢复
+### 剧本、媒体生成与导出恢复
 
 剧本每个 Provider 调用前先持久化提交检查点，返回后持久化响应。重启可以跳过已成功阶段；
 若中断发生在提交与响应落库之间，任务以 `provider_submission_uncertain` 失败，不重提。
@@ -75,13 +75,17 @@ flowchart LR
 `submit / poll / cancel / fetch_result`；首次提交后立即保存远程任务 ID，重启后只轮询。
 项目批量生成使用一个父任务和每镜头一个子任务，批次创建与冲突检查是原子的。
 
+图片候选同样在提交前冻结请求并持久化提交检查点；批量图片按目标拆成父子任务。
+视频截帧和成片导出冻结源媒体与时间线，在单并发本地媒体通道中执行可取消的 FFmpeg
+子进程。本地确定性任务中断后可以安全重跑，Provider 提交未知时仍禁止盲目重提。
+
 ### 当前限制
 
 - 本地 Worker 仍以单 API 进程为部署边界。
 - Redis 当前不是任务队列或真相源。
 - 没有 Celery 或 LangGraph worker。
 - 运行中 Provider 请求不保证能够立即取消。
-- 图片批量生成和 FFmpeg 导出仍可能同步占用 API 进程。
+- 本地媒体通道只有单进程并发控制，不提供跨 API 实例的全局 FFmpeg 资源调度。
 
 ## 5. Provider Adapter
 

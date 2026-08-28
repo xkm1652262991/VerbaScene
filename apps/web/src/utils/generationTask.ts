@@ -35,6 +35,9 @@ export function canRetryGenerationTask(task: GenerationTask) {
       task.task_type === "script_generation"
       || task.task_type === "shot_breakdown"
       || task.task_type === "shot_video_candidate_generation"
+      || task.task_type === "image_candidate_generation"
+      || task.task_type === "video_frame_extraction"
+      || task.task_type === "project_export"
     )
   );
 }
@@ -58,6 +61,10 @@ export function generationTaskTypeLabel(taskType: string) {
     script_generation: "剧本生成",
     shot_video_candidate_generation: "镜头视频生成",
     project_video_candidate_batch: "项目视频批次",
+    image_candidate_generation: "图片候选生成",
+    reference_image_candidate_batch: "角色场景图片批次",
+    shot_image_candidate_batch: "分镜图片批次",
+    project_export: "成片导出",
     single_shot_video_candidate_generation: "历史镜头视频生成",
     shot_video_regeneration_candidate: "历史镜头视频重生成",
     video_frame_extraction: "视频截帧",

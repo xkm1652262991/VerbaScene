@@ -334,6 +334,20 @@ export function ProjectDetailPage({ initialShotId, initialWorkspace, projectId }
   const hasActiveVideoTask = projectTasks.some((task) => (
     task.task_type === "shot_video_candidate_generation" && isGenerationTaskActive(task)
   ));
+  const imageTasks = projectTasks.filter((task) => task.task_type === "image_candidate_generation");
+  const referenceImageBatchTask = projectTasks.find(
+    (task) => task.task_type === "reference_image_candidate_batch",
+  ) ?? null;
+  const selectedShotImageTask = selectedShot
+    ? imageTasks.find((task) => task.resource_key === `shot:${selectedShot.id}:image:shot_storyboard:base`) ?? null
+    : null;
+  const selectedShotFrameTask = selectedShot
+    ? projectTasks.find((task) => (
+      task.task_type === "video_frame_extraction"
+      && task.input_payload.shot_id === selectedShot.id
+    )) ?? null
+    : null;
+  const projectExportTask = projectTasks.find((task) => task.task_type === "project_export") ?? null;
 
   async function run(actionLabel: string, action: () => Promise<unknown>, successMessage: string) {
     try {
@@ -570,6 +584,8 @@ export function ProjectDetailPage({ initialShotId, initialWorkspace, projectId }
           imageProfileId={imageProfileId}
           imageProfiles={imageProfiles}
           hasActiveVideoTask={hasActiveVideoTask}
+          selectedShotImageTask={selectedShotImageTask}
+          selectedShotFrameTask={selectedShotFrameTask}
           onAdopt={(candidate) => run(
             "采用片段版本",
             () => promoteAssetCandidate(candidate.id, "从视频制作页采用"),
@@ -625,10 +641,14 @@ export function ProjectDetailPage({ initialShotId, initialWorkspace, projectId }
               if (success && nextShot) commitShotSelection(nextShot.id);
             });
           }}
-          onGenerateImage={() => selectedShot && run(
-            "生成片段首帧候选",
-            () => generateSingleShotImageCandidate(selectedShot.id, imageProfileId || null),
-            "首帧候选已生成。",
+          onGenerateImage={() => selectedShot && submitTask(
+            "提交片段首帧候选",
+            () => generateSingleShotImageCandidate(
+              selectedShot.id,
+              imageProfileId || null,
+              { idempotencyKey: createTaskIdempotencyKey(`shot:${selectedShot.id}:image`) },
+            ),
+            "首帧候选任务已受理，当前版本保持不变",
           )}
           onGenerateShots={() => {
             if (snapshot.shots.length && !window.confirm("重新生成会在任务成功后把当前片段批次移入历史，失败或取消不会影响当前方案。是否继续？")) return;
@@ -663,10 +683,14 @@ export function ProjectDetailPage({ initialShotId, initialWorkspace, projectId }
             ),
             "视频候选任务已受理，可继续编辑其他片段",
           )}
-          onExtractFrame={(asset) => run(
-            "截取片段首帧",
-            () => extractVideoFrameCandidate(asset.id, 0),
-            "已从当前视频截取首帧候选，采用后才会切换片段首帧。",
+          onExtractFrame={(asset) => submitTask(
+            "提交视频截帧",
+            () => extractVideoFrameCandidate(
+              asset.id,
+              0,
+              { idempotencyKey: createTaskIdempotencyKey(`asset:${asset.id}:frame:0`) },
+            ),
+            "截帧任务已受理，完成并采用后才会切换片段首帧",
           )}
           onLocalRegenerate={(asset) => submitTask(
             "重新生成本片段",
@@ -837,6 +861,8 @@ export function ProjectDetailPage({ initialShotId, initialWorkspace, projectId }
                   entities={snapshot.entities}
                   imageProfileId={imageProfileId}
                   imageProfiles={imageProfiles}
+                  imageBatchTask={referenceImageBatchTask}
+                  imageTasks={imageTasks}
                   isBusy={Boolean(busyLabel)}
                   onAdopt={(candidate) => void run("采用资产图", () => promoteAssetCandidate(candidate.id, "从资产图生成页采用"), "资产图已采用。")}
                   onCancelTask={(task) => { void cancelTask(task); }}
@@ -853,20 +879,26 @@ export function ProjectDetailPage({ initialShotId, initialWorkspace, projectId }
                       "分镜导演任务已受理，完成前仍可管理资产",
                     );
                   }}
-                  onGenerateAll={() => void run(
-                    "生成角色和场景资产图",
-                    () => generateReferenceImageCandidates(projectId, imageProfileId || null),
-                    "角色和场景图片候选已生成，请逐项采用。",
+                  onGenerateAll={() => void submitTask(
+                    "提交角色和场景资产图批次",
+                    () => generateReferenceImageCandidates(
+                      projectId,
+                      imageProfileId || null,
+                      { idempotencyKey: createTaskIdempotencyKey(`project:${projectId}:reference-images`) },
+                    ),
+                    "图片批次已受理，每个角色和场景会独立执行",
                   )}
-                  onGenerateImage={(entity, variantKey) => void run(
-                    "生成单个资产图",
+                  onGenerateImage={(entity, variantKey) => void submitTask(
+                    "提交单个资产图",
                     () => generateSingleReferenceImageCandidate(projectId, {
                       entity_type: entity.kind,
                       entity_id: entity.id,
                       asset_role: entityRole(entity.kind),
                       variant_key: variantKey,
-                    }, imageProfileId || null),
-                    "单个资产图候选已生成。",
+                    }, imageProfileId || null, {
+                      idempotencyKey: createTaskIdempotencyKey(`${entity.kind}:${entity.id}:image:${variantKey}`),
+                    }),
+                    "单个资产图任务已受理",
                   )}
                   onGenerateEntities={() => void run(
                     entityItems(snapshot.entities).length ? "重新提取资产设定" : "提取资产设定",
@@ -888,6 +920,7 @@ export function ProjectDetailPage({ initialShotId, initialWorkspace, projectId }
                   entities={snapshot.entities}
                   imageProfileId={imageProfileId}
                   imageProfiles={imageProfiles}
+                  imageTasks={imageTasks}
                   isBusy={Boolean(busyLabel)}
                   onAdopt={(candidate) => void run("采用资产版本", () => promoteAssetCandidate(candidate.id, "从资产库采用"), "当前资产版本已切换。")}
                   onGenerateEntities={() => void run(
@@ -895,16 +928,20 @@ export function ProjectDetailPage({ initialShotId, initialWorkspace, projectId }
                     () => generateProjectEntities(projectId),
                     "资产设定已更新，旧产物仍然保留。",
                   )}
-                  onGenerateImage={(entity, variantKey) => void run(
-                    "生成资产候选",
+                  onCancelTask={(task) => { void cancelTask(task); }}
+                  onGenerateImage={(entity, variantKey) => void submitTask(
+                    "提交资产候选",
                     () => generateSingleReferenceImageCandidate(projectId, {
                       entity_type: entity.kind,
                       entity_id: entity.id,
                       asset_role: entityRole(entity.kind),
                       variant_key: variantKey,
-                    }, imageProfileId || null),
-                    "新图片候选已生成。",
+                    }, imageProfileId || null, {
+                      idempotencyKey: createTaskIdempotencyKey(`${entity.kind}:${entity.id}:image:${variantKey}`),
+                    }),
+                    "新图片候选任务已受理",
                   )}
+                  onRetryTask={(task) => { void retryTask(task); }}
                   onSavePrompt={(entity, prompt) => void run("保存图片 Prompt", () => updateEntityPrompt(entity, prompt), "图片 Prompt 已保存。")}
                   onSelectAsset={(asset) => void run("切换资产版本", () => selectAsset(asset.id), `已切换到 v${asset.version}。`)}
                   onSelectEntity={(key) => { setSelectedEntityKey(key); setSelectedVariantKey("base"); }}
@@ -922,15 +959,23 @@ export function ProjectDetailPage({ initialShotId, initialWorkspace, projectId }
 
       {exportOpen ? (
         <ExportDialog
+          actionBusy={Boolean(busyLabel)}
           assets={snapshot.assets}
+          exportTask={projectExportTask}
           mode={subtitleMode}
+          onCancelTask={(task) => { void cancelTask(task); }}
           onClose={() => setExportOpen(false)}
           onModeChange={setSubtitleMode}
-          onSubmit={() => void run(
-              "导出本集",
-              () => composeProject(projectId, subtitleMode),
-              subtitleMode === "none" ? "无字幕成片已导出。" : "字幕已在导出时烧录。",
-          ).then((success) => { if (success) setExportOpen(false); })}
+          onRetryTask={(task) => { void retryTask(task); }}
+          onSubmit={() => void submitTask(
+            "提交成片导出",
+            () => composeProject(
+              projectId,
+              subtitleMode,
+              { idempotencyKey: createTaskIdempotencyKey(`project:${projectId}:export:${subtitleMode}`) },
+            ),
+            "导出任务已受理，可关闭弹窗继续编辑",
+          )}
           shots={snapshot.shots}
         />
       ) : null}
@@ -1080,6 +1125,8 @@ function AssetGenerationWorkspace({
   entities,
   imageProfileId,
   imageProfiles,
+  imageBatchTask,
+  imageTasks,
   isBusy,
   onAdopt,
   onCancelTask,
@@ -1100,6 +1147,8 @@ function AssetGenerationWorkspace({
   entities: EntityBundle;
   imageProfileId: string;
   imageProfiles: ImageProviderProfile[];
+  imageBatchTask: GenerationTask | null;
+  imageTasks: GenerationTask[];
   isBusy: boolean;
   onAdopt: (candidate: AssetCandidate) => void;
   onCancelTask: (task: GenerationTask) => void;
@@ -1141,6 +1190,8 @@ function AssetGenerationWorkspace({
   const adoptedCount = visualEntities.filter((entity) => adoptedByEntity.has(entityKey(entity))).length;
   const pendingCount = Array.from(pendingByEntity.values()).reduce((total, items) => total + items.length, 0);
   const hasEntities = visualEntities.length > 0;
+  const imageBatchActive = Boolean(imageBatchTask && isGenerationTaskActive(imageBatchTask));
+  const hasActiveImageTask = imageTasks.some((task) => isGenerationTaskActive(task));
 
   return (
     <section className="asset-generation-workspace">
@@ -1165,6 +1216,15 @@ function AssetGenerationWorkspace({
           title="分镜导演任务"
         />
       ) : null}
+      {imageBatchTask && imageBatchTask.status !== "succeeded" ? (
+        <GenerationTaskBanner
+          actionBusy={isBusy}
+          onCancel={onCancelTask}
+          onRetry={onRetryTask}
+          task={imageBatchTask}
+          title="角色与场景图片批次"
+        />
+      ) : null}
 
       {!hasEntities ? (
         <section className="asset-generation-empty">
@@ -1186,8 +1246,8 @@ function AssetGenerationWorkspace({
             </label>
             <div>
               <button className="secondary-button" onClick={onGenerateEntities} type="button">重新提取设定</button>
-              <button className="primary-button" disabled={!imageProfileId} onClick={onGenerateAll} type="button">
-                {adoptedCount || pendingCount ? "重新生成全部角色和场景" : "生成全部角色和场景"}
+              <button className="primary-button" disabled={!imageProfileId || imageBatchActive || hasActiveImageTask || isBusy} onClick={onGenerateAll} type="button">
+                {imageBatchActive ? "图片批次进行中" : adoptedCount || pendingCount ? "重新生成全部角色和场景" : "生成全部角色和场景"}
               </button>
             </div>
           </section>
@@ -1206,6 +1266,10 @@ function AssetGenerationWorkspace({
                       const key = entityKey(entity);
                       const adopted = adoptedByEntity.get(key);
                       const pending = (pendingByEntity.get(key) ?? []).sort((left, right) => right.version - left.version);
+                      const imageTask = imageTasks.find((task) => (
+                        task.resource_key === `${entity.kind}:${entity.id}:image:${entityRole(entity.kind)}:base`
+                      )) ?? null;
+                      const imageTaskActive = Boolean(imageTask && isGenerationTaskActive(imageTask));
                       return (
                         <article className={adopted ? "complete" : pending.length ? "pending" : ""} key={key}>
                           <div className="asset-generation-preview">
@@ -1224,8 +1288,8 @@ function AssetGenerationWorkspace({
                           </div>
                           <EntityPromptPreview entity={entity} />
                           <div className="asset-generation-card-actions">
-                            <button className="primary-button" disabled={!imageProfileId || isBusy} onClick={() => onGenerateImage(entity, "base")} type="button">
-                              {adopted || pending.length ? `重新生成${kind === "character" ? "角色" : "场景"}候选` : `生成${kind === "character" ? "角色" : "场景"}图`}
+                            <button className="primary-button" disabled={!imageProfileId || isBusy || imageTaskActive} onClick={() => onGenerateImage(entity, "base")} type="button">
+                              {imageTaskActive ? "图片生成中" : adopted || pending.length ? `重新生成${kind === "character" ? "角色" : "场景"}候选` : `生成${kind === "character" ? "角色" : "场景"}图`}
                             </button>
                             {pending.length ? (
                               <div className="asset-generation-candidates">
@@ -1287,11 +1351,14 @@ function AssetLibraryWorkspace({
   entities,
   imageProfileId,
   imageProfiles,
+  imageTasks,
   isBusy,
   onAdopt,
+  onCancelTask,
   onGenerateEntities,
   onGenerateImage,
   onSavePrompt,
+  onRetryTask,
   onSelectAsset,
   onSelectEntity,
   onSelectProfile,
@@ -1305,11 +1372,14 @@ function AssetLibraryWorkspace({
   entities: EntityBundle;
   imageProfileId: string;
   imageProfiles: ImageProviderProfile[];
+  imageTasks: GenerationTask[];
   isBusy: boolean;
   onAdopt: (candidate: AssetCandidate) => void;
+  onCancelTask: (task: GenerationTask) => void;
   onGenerateEntities: () => void;
   onGenerateImage: (entity: EntityItem, variantKey: string) => void;
   onSavePrompt: (entity: EntityItem, prompt: string) => void;
+  onRetryTask: (task: GenerationTask) => void;
   onSelectAsset: (asset: Asset) => void;
   onSelectEntity: (key: string) => void;
   onSelectProfile: (id: string) => void;
@@ -1330,6 +1400,12 @@ function AssetLibraryWorkspace({
     ? candidates.filter((candidate) => candidate.asset_type === "image" && candidate.entity_type === selected.kind && candidate.entity_id === selected.id && (candidate.variant_key ?? "base") === variantKey && candidate.status === "pending_review")
     : [];
   const prompt = selected ? entityPrompt(selected) : "";
+  const selectedImageTask = selected
+    ? imageTasks.find((task) => (
+      task.resource_key === `${selected.kind}:${selected.id}:image:${entityRole(selected.kind)}:${variantKey}`
+    )) ?? null
+    : null;
+  const selectedImageTaskActive = Boolean(selectedImageTask && isGenerationTaskActive(selectedImageTask));
   const [promptDraft, setPromptDraft] = useState(prompt);
   useEffect(() => setPromptDraft(prompt), [prompt, selected?.id]);
 
@@ -1357,6 +1433,16 @@ function AssetLibraryWorkspace({
         </nav>
         {selected ? (
           <main className="asset-desk-main">
+            {selectedImageTask && selectedImageTask.status !== "succeeded" ? (
+              <GenerationTaskBanner
+                actionBusy={isBusy}
+                compact
+                onCancel={onCancelTask}
+                onRetry={onRetryTask}
+                task={selectedImageTask}
+                title={`${selected.name} 图片任务`}
+              />
+            ) : null}
             <div className="asset-variant-tabs">
               {variants.map((variant) => (
                 <button className={variant.key === variantKey ? "active" : ""} key={variant.key} onClick={() => onSelectVariant(variant.key)} type="button">
@@ -1376,8 +1462,8 @@ function AssetLibraryWorkspace({
                   <p className="asset-nonvisual-note">道具默认不生成独立资产图，由片段剧情、动作和空间关系描述控制。</p>
                 ) : (
                   <div className="asset-version-actions">
-                    <button className="primary-button" disabled={!imageProfileId || isBusy} onClick={() => onGenerateImage(selected, variantKey)} type="button">
-                      {selected.kind === "character" ? (versions.length ? "重生成角色多视角图" : "生成角色多视角图") : "生成候选"}
+                    <button className="primary-button" disabled={!imageProfileId || isBusy || selectedImageTaskActive} onClick={() => onGenerateImage(selected, variantKey)} type="button">
+                      {selectedImageTaskActive ? "图片生成中" : selected.kind === "character" ? (versions.length ? "重生成角色多视角图" : "生成角色多视角图") : "生成候选"}
                     </button>
                     <label className={`secondary-button upload-button ${isBusy ? "disabled" : ""}`}>
                       {versions.length ? "上传新版本" : "上传本地图片"}
@@ -1415,29 +1501,48 @@ function AssetLibraryWorkspace({
 }
 
 function ExportDialog({
+  actionBusy,
   assets,
+  exportTask,
   mode,
+  onCancelTask,
   onClose,
   onModeChange,
+  onRetryTask,
   onSubmit,
   shots,
 }: {
+  actionBusy: boolean;
   assets: Asset[];
+  exportTask: GenerationTask | null;
   mode: SubtitleMode;
+  onCancelTask: (task: GenerationTask) => void;
   onClose: () => void;
   onModeChange: (mode: SubtitleMode) => void;
+  onRetryTask: (task: GenerationTask) => void;
   onSubmit: () => void;
   shots: Shot[];
 }) {
   const selected = selectedVideoAssets(assets);
+  const exportTaskActive = Boolean(exportTask && isGenerationTaskActive(exportTask));
   return (
     <div className="asset-lightbox" role="presentation">
       <section aria-modal="true" className="export-dialog" role="dialog">
         <header><div><span>EXPORT</span><h2>导出本集</h2></div><button onClick={onClose} type="button">×</button></header>
+        {exportTask && exportTask.status !== "succeeded" ? (
+          <GenerationTaskBanner
+            actionBusy={actionBusy}
+            compact
+            onCancel={onCancelTask}
+            onRetry={onRetryTask}
+            task={exportTask}
+            title="成片导出任务"
+          />
+        ) : null}
         <label>字幕模式<select value={mode} onChange={(event) => onModeChange(event.target.value as SubtitleMode)}><option value="none">无字幕（默认）</option><option value="en">英文字幕</option><option value="bilingual">中英双语字幕</option></select></label>
         <p>视频片段原生音轨会被保留；没有音轨的片段会自动补静音。</p>
         <div className="export-version-list">{shots.map((shot) => { const asset = selected.find((item) => item.entity_id === shot.id); return <span key={shot.id}>片段 {shot.shot_no} · {asset ? `v${asset.version}` : "缺少已采用视频"}</span>; })}</div>
-        <footer><button className="secondary-button" onClick={onClose} type="button">取消</button><button className="primary-button" disabled={selected.length !== shots.length || shots.length === 0} onClick={onSubmit} type="button">开始导出</button></footer>
+        <footer><button className="secondary-button" onClick={onClose} type="button">关闭</button><button className="primary-button" disabled={selected.length !== shots.length || shots.length === 0 || exportTaskActive || actionBusy} onClick={onSubmit} type="button">{exportTaskActive ? "导出中" : "开始导出"}</button></footer>
       </section>
     </div>
   );

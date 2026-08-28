@@ -368,6 +368,7 @@ class VideoCandidateTaskHandler:
                 task.project_id,
                 "videos",
                 summary=str(exc),
+                task_id=task.id,
                 error_code=code,
             )
             db.commit()

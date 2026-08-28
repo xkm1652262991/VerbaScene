@@ -290,12 +290,12 @@ class TaskRepository:
             db.add(task)
             db.flush()
 
-        if task.task_type == "project_video_candidate_batch":
-            children = list(
-                db.scalars(
-                    select(GenerationTask).where(GenerationTask.parent_task_id == task.id)
-                ).all()
-            )
+        children = list(
+            db.scalars(
+                select(GenerationTask).where(GenerationTask.parent_task_id == task.id)
+            ).all()
+        )
+        if children:
             for child in children:
                 if child.status in TERMINAL_TASK_STATUSES:
                     continue
@@ -329,7 +329,7 @@ class TaskRepository:
             )
         if source.status not in {TaskStatus.FAILED.value, TaskStatus.CANCELLED.value}:
             raise TaskConflictError("Only failed or cancelled tasks can be retried", task_id=source.id)
-        if source.task_type == "project_video_candidate_batch":
+        if source.children:
             raise TaskConflictError(
                 "Retry failed or cancelled child tasks individually",
                 task_id=source.id,
@@ -355,7 +355,7 @@ class TaskRepository:
         )
         if result.created and source.parent_task_id:
             parent = db.get(GenerationTask, source.parent_task_id)
-            if parent is not None and parent.task_type == "project_video_candidate_batch":
+            if parent is not None:
                 parent_dedupe_key = active_dedupe_key(
                     parent.task_type,
                     parent.resource_key or f"project:{parent.project_id}:videos",
@@ -367,11 +367,12 @@ class TaskRepository:
                 )
                 if conflicting_parent is not None:
                     raise TaskConflictError(
-                        "Another project video batch is active",
+                        "Another parent batch is active",
                         task_id=conflicting_parent.id,
                     )
                 parent.status = TaskStatus.WAITING_CHILDREN.value
                 parent.finished_at = None
+                parent.cancel_requested_at = None
                 parent.error_code = None
                 parent.error_message = None
                 parent.progress_label = "子任务已人工重试"
@@ -381,8 +382,6 @@ class TaskRepository:
         return result
 
     def reconcile_parent(self, db: Session, parent: GenerationTask) -> bool:
-        if parent.task_type != "project_video_candidate_batch":
-            return False
         all_children = list(
             db.scalars(
                 select(GenerationTask).where(GenerationTask.parent_task_id == parent.id)
@@ -409,9 +408,31 @@ class TaskRepository:
         for child in children:
             counts[child.status] = counts.get(child.status, 0) + 1
         terminal_count = sum(counts.get(value, 0) for value in TERMINAL_TASK_STATUSES)
+        candidate_ids = [
+            str(candidate_id)
+            for child in children
+            for candidate_id in (
+                child.result_payload.get("candidate_ids", [])
+                if isinstance(child.result_payload, dict)
+                and isinstance(child.result_payload.get("candidate_ids"), list)
+                else []
+            )
+        ]
+        output_asset_ids = [
+            str(asset_id)
+            for child in children
+            for asset_id in (child.output_asset_ids or [])
+        ]
         parent.progress = int((terminal_count / len(children)) * 100)
         parent.result_payload = {
             **dict(parent.result_payload or {}),
+            "candidate_ids": candidate_ids,
+            "output_asset_ids": output_asset_ids,
+            "failed_child_task_ids": [
+                child.id
+                for child in children
+                if child.status in {TaskStatus.FAILED.value, TaskStatus.CANCELLED.value}
+            ],
             "summary": {
                 "total": len(children),
                 "attempt_count": len(all_children),
@@ -425,7 +446,15 @@ class TaskRepository:
             db.add(parent)
             db.flush()
             return True
-        if counts.get(TaskStatus.FAILED.value, 0) or counts.get(TaskStatus.CANCELLED.value, 0):
+        if parent.cancel_requested_at is not None:
+            self.finish(
+                db,
+                parent,
+                status=TaskStatus.CANCELLED,
+                progress_label="批次已取消",
+                result_payload=parent.result_payload,
+            )
+        elif counts.get(TaskStatus.FAILED.value, 0) or counts.get(TaskStatus.CANCELLED.value, 0):
             self.finish(
                 db,
                 parent,

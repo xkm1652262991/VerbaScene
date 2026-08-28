@@ -1,26 +1,36 @@
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Header, Query, status
 from sqlalchemy.orm import Session
 
 from app.db import get_db
+from app.exports.export_tasks import create_project_export_task
+from app.platform.tasks.runtime import get_task_runtime
 from app.schemas.common import ApiResponse, PageResponse
-from app.schemas.export import CompositionRequest, CompositionResponse, ExportRead
-from app.services.export_service import compose_project, list_exports_page
+from app.schemas.export import CompositionRequest, ExportRead
+from app.schemas.task import GenerationTaskRead
+from app.services.export_service import list_exports_page
 
 router = APIRouter(tags=["exports"])
 
 
-@router.post("/api/projects/{project_id}/compose", response_model=ApiResponse[CompositionResponse])
+@router.post(
+    "/api/projects/{project_id}/compose",
+    response_model=ApiResponse[GenerationTaskRead],
+    status_code=status.HTTP_202_ACCEPTED,
+)
 def compose_project_endpoint(
     project_id: str,
     payload: CompositionRequest | None = None,
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
     db: Session = Depends(get_db),
-) -> ApiResponse[CompositionResponse]:
-    export, asset = compose_project(
+) -> ApiResponse[GenerationTaskRead]:
+    task = create_project_export_task(
         db,
         project_id,
         subtitle_mode=payload.subtitle_mode if payload else "none",
+        idempotency_key=idempotency_key,
     )
-    return ApiResponse(data={"export": export, "asset": asset})
+    get_task_runtime().wake()
+    return ApiResponse(data=task)
 
 
 @router.get("/api/projects/{project_id}/exports", response_model=PageResponse[ExportRead])

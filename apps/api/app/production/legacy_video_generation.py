@@ -143,6 +143,7 @@ def generate_shot_videos(db: Session, project_id: str) -> tuple[list[Asset], Gen
             project_id,
             "videos",
             summary=message,
+            task_id=task.id,
             error_code=failure_code,
             failure_reason=normalize_failure_reason(code=failure_code, message=message, raw_response=raw_response, stage="videos"),
         )
@@ -250,6 +251,7 @@ def generate_shot_video_candidates(db: Session, project_id: str) -> tuple[list[A
             project_id,
             "videos",
             summary=message,
+            task_id=task.id,
             error_code=failure_code,
             failure_reason=normalize_failure_reason(code=failure_code, message=message, raw_response=raw_response, stage="videos"),
         )
@@ -350,6 +352,7 @@ def generate_single_shot_video(
             shot.project_id,
             "videos",
             summary=message,
+            task_id=task.id,
             error_code=failure_code,
             failure_reason=normalize_failure_reason(code=failure_code, message=message, raw_response=raw_response, stage="videos"),
         )
@@ -606,6 +609,7 @@ def regenerate_video_asset(db: Session, asset_id: str) -> tuple[Asset, Generatio
             source_asset.project_id,
             "videos",
             summary=message,
+            task_id=task.id,
             error_code=failure_code,
             failure_reason=normalize_failure_reason(code=failure_code, message=message, raw_response=raw_response, stage="videos"),
         )
@@ -683,6 +687,7 @@ def regenerate_video_asset_candidate(db: Session, asset_id: str) -> tuple[AssetC
             source_asset.project_id,
             "videos",
             summary=message,
+            task_id=task.id,
             error_code=failure_code,
             failure_reason=normalize_failure_reason(code=failure_code, message=message, raw_response=raw_response, stage="videos"),
         )

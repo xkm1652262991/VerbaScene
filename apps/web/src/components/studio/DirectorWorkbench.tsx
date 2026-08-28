@@ -40,6 +40,8 @@ type DirectorWorkbenchProps = {
   imageProfileId: string;
   imageProfiles: ImageProviderProfile[];
   hasActiveVideoTask: boolean;
+  selectedShotFrameTask: GenerationTask | null;
+  selectedShotImageTask: GenerationTask | null;
   onAdopt: (candidate: AssetCandidate) => void;
   onBindAssets: (assetIds: string[]) => Promise<boolean>;
   onCancelTask: (task: GenerationTask) => void;
@@ -82,6 +84,8 @@ export function DirectorWorkbench({
   imageProfileId,
   imageProfiles,
   hasActiveVideoTask,
+  selectedShotFrameTask,
+  selectedShotImageTask,
   onAdopt,
   onBindAssets,
   onCancelTask,
@@ -222,6 +226,8 @@ export function DirectorWorkbench({
     return result;
   }, [videoTasks]);
   const selectedShotTaskActive = Boolean(selectedShotTask && isGenerationTaskActive(selectedShotTask));
+  const selectedShotImageTaskActive = Boolean(selectedShotImageTask && isGenerationTaskActive(selectedShotImageTask));
+  const selectedShotFrameTaskActive = Boolean(selectedShotFrameTask && isGenerationTaskActive(selectedShotFrameTask));
   const batchTaskActive = Boolean(batchTask && isGenerationTaskActive(batchTask));
   const shotDirectionTaskActive = Boolean(shotDirectionTask && isGenerationTaskActive(shotDirectionTask));
   const inspectedAsset = adoptedImages.find((asset) => asset.id === inspectedAssetId) ?? null;
@@ -664,6 +670,26 @@ export function DirectorWorkbench({
             title={`片段 ${String(selectedShot.shot_no).padStart(2, "0")} 视频任务`}
           />
         ) : null}
+        {selectedShotImageTask && selectedShotImageTask.status !== "succeeded" ? (
+          <GenerationTaskBanner
+            actionBusy={actionBusy}
+            compact
+            onCancel={onCancelTask}
+            onRetry={onRetryTask}
+            task={selectedShotImageTask}
+            title={`片段 ${String(selectedShot.shot_no).padStart(2, "0")} 首帧任务`}
+          />
+        ) : null}
+        {selectedShotFrameTask && selectedShotFrameTask.status !== "succeeded" ? (
+          <GenerationTaskBanner
+            actionBusy={actionBusy}
+            compact
+            onCancel={onCancelTask}
+            onRetry={onRetryTask}
+            task={selectedShotFrameTask}
+            title="视频截帧任务"
+          />
+        ) : null}
         <div className="director-preview-canvas">
           {visibleMedia ? <MediaPreview media={visibleMedia} /> : <div className="director-empty">尚无首帧或视频</div>}
           <div className="director-preview-status">
@@ -681,7 +707,9 @@ export function DirectorWorkbench({
           </div>
         </div>
         <div className="director-preview-primary-actions">
-          <button className="secondary-button" onClick={onGenerateImage} type="button">{currentImage ? "重生成首帧" : "生成首帧"}</button>
+          <button className="secondary-button" disabled={selectedShotImageTaskActive || actionBusy} onClick={onGenerateImage} type="button">
+            {selectedShotImageTaskActive ? "首帧生成中" : currentImage ? "重生成首帧" : "生成首帧"}
+          </button>
           <button
             className="secondary-button"
             disabled={!currentImage && !hasExplicitFirstFrame}
@@ -760,7 +788,9 @@ export function DirectorWorkbench({
         {currentVideo ? (
           <div className="director-preview-tools">
             <a download href={currentVideo.uri}>下载</a>
-            <button onClick={() => onExtractFrame(currentVideo)} type="button">截帧</button>
+            <button disabled={selectedShotFrameTaskActive || actionBusy} onClick={() => onExtractFrame(currentVideo)} type="button">
+              {selectedShotFrameTaskActive ? "截帧中" : "截帧"}
+            </button>
             <button disabled={selectedShotTaskActive || actionBusy} onClick={() => onLocalRegenerate(currentVideo)} type="button">
               {selectedShotTaskActive ? "生成中" : "重新生成本片段"}
             </button>

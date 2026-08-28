@@ -1,23 +1,16 @@
 from dataclasses import dataclass
-from datetime import datetime, timezone
-
 from fastapi import HTTPException, status
 from sqlalchemy.orm import Session
 
 from app.models import AssetCandidate, GenerationTask
 from app.production.video_tasks import create_video_candidate_regeneration_task
 from app.services.asset_candidate_service import OPEN_CANDIDATE_STATUSES
-from app.services.image_generation_service import regenerate_image_candidate_from_candidate
+from app.assets.image_tasks import create_image_candidate_regeneration_task
 
 
 @dataclass(frozen=True)
 class CandidateRegenerationResult:
     task: GenerationTask
-    candidate: AssetCandidate | None
-
-    @property
-    def is_async(self) -> bool:
-        return self.candidate is None
 
 
 def regenerate_asset_candidate(
@@ -44,36 +37,17 @@ def regenerate_asset_candidate(
             source_candidate.id,
             idempotency_key=idempotency_key,
         )
-        return CandidateRegenerationResult(task=task, candidate=None)
+        return CandidateRegenerationResult(task=task)
     if source_candidate.asset_type != "image":
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail="Only image and video candidates can be regenerated",
         )
 
-    replacement, task = regenerate_image_candidate_from_candidate(
+    task = create_image_candidate_regeneration_task(
         db,
-        source_candidate,
+        source_candidate.id,
         image_provider_profile_id=image_provider_profile_id,
+        idempotency_key=idempotency_key,
     )
-    source_candidate.status = "rejected"
-    source_candidate.review_note = f"已由重新生成候选 {replacement.id} 替代"
-    source_candidate.rejected_at = datetime.now(timezone.utc)
-    replacement.raw_response = {
-        **(replacement.raw_response or {}),
-        "regeneration": {
-            "source_candidate_id": source_candidate.id,
-            "source_candidate_version": source_candidate.version,
-        },
-    }
-    task.input_payload = {
-        **(task.input_payload or {}),
-        "source_candidate_id": source_candidate.id,
-        "source_candidate_version": source_candidate.version,
-    }
-    db.add_all([source_candidate, replacement, task])
-    db.commit()
-    db.refresh(source_candidate)
-    db.refresh(replacement)
-    db.refresh(task)
-    return CandidateRegenerationResult(task=task, candidate=replacement)
+    return CandidateRegenerationResult(task=task)

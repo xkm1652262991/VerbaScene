@@ -4,6 +4,14 @@ from fastapi import APIRouter, Depends, File, Form, Header, HTTPException, Query
 from sqlalchemy.orm import Session
 
 from app.db import get_db
+from app.assets.frame_extraction_tasks import create_video_frame_extraction_task
+from app.assets.image_tasks import (
+    create_image_asset_regeneration_task,
+    create_reference_image_batch_task,
+    create_shot_image_batch_task,
+    create_single_reference_image_task,
+    create_single_shot_image_task,
+)
 from app.platform.tasks.runtime import get_task_runtime
 from app.production.video_tasks import (
     create_project_video_batch_task,
@@ -11,22 +19,10 @@ from app.production.video_tasks import (
     create_video_regeneration_task,
 )
 from app.schemas.common import ApiResponse, PageResponse
-from app.schemas.asset import AssetCandidateGenerationResponse, AssetRead, ShotVideoGenerationRequest
+from app.schemas.asset import AssetRead, ShotVideoGenerationRequest
 from app.schemas.task import GenerationTaskRead
-from app.services.asset_lifecycle_service import (
-    delete_asset,
-    extract_video_frame_candidate,
-    select_asset,
-    upload_image_asset,
-)
+from app.services.asset_lifecycle_service import delete_asset, select_asset, upload_image_asset
 from app.services.asset_repository import get_project_or_404, list_assets_page
-from app.services.image_generation_service import (
-    generate_reference_image_candidates,
-    generate_shot_image_candidates,
-    generate_single_reference_image_candidate,
-    generate_single_shot_image_candidate,
-    regenerate_image_asset_candidate,
-)
 
 router = APIRouter(tags=["assets"])
 
@@ -61,21 +57,32 @@ def generate_project_reference_images_endpoint(
     _raise_candidate_required("/api/projects/{project_id}/reference-images/generate-candidates")
 
 
-@router.post("/api/projects/{project_id}/reference-images/generate-candidates", response_model=ApiResponse[AssetCandidateGenerationResponse])
+@router.post(
+    "/api/projects/{project_id}/reference-images/generate-candidates",
+    response_model=ApiResponse[GenerationTaskRead],
+    status_code=status.HTTP_202_ACCEPTED,
+)
 def generate_project_reference_image_candidates_endpoint(
     project_id: str,
     image_provider_profile_id: str | None = Query(default=None),
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
     db: Session = Depends(get_db),
-) -> ApiResponse[AssetCandidateGenerationResponse]:
-    candidates, task = generate_reference_image_candidates(
+) -> ApiResponse[GenerationTaskRead]:
+    task = create_reference_image_batch_task(
         db,
         project_id,
         image_provider_profile_id=image_provider_profile_id,
+        idempotency_key=idempotency_key,
     )
-    return ApiResponse(data={"candidates": candidates, "task_id": task.id})
+    get_task_runtime().wake()
+    return ApiResponse(data=task)
 
 
-@router.post("/api/projects/{project_id}/reference-images/generate-candidate", response_model=ApiResponse[AssetCandidateGenerationResponse])
+@router.post(
+    "/api/projects/{project_id}/reference-images/generate-candidate",
+    response_model=ApiResponse[GenerationTaskRead],
+    status_code=status.HTTP_202_ACCEPTED,
+)
 def generate_single_reference_image_candidate_endpoint(
     project_id: str,
     entity_type: str = Query(...),
@@ -83,9 +90,10 @@ def generate_single_reference_image_candidate_endpoint(
     asset_role: str = Query(...),
     variant_key: str = Query(default="base", min_length=1, max_length=120),
     image_provider_profile_id: str | None = Query(default=None),
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
     db: Session = Depends(get_db),
-) -> ApiResponse[AssetCandidateGenerationResponse]:
-    candidate, task = generate_single_reference_image_candidate(
+) -> ApiResponse[GenerationTaskRead]:
+    task = create_single_reference_image_task(
         db,
         project_id,
         entity_type=entity_type,
@@ -93,8 +101,10 @@ def generate_single_reference_image_candidate_endpoint(
         asset_role=asset_role,
         variant_key=variant_key,
         image_provider_profile_id=image_provider_profile_id,
+        idempotency_key=idempotency_key,
     )
-    return ApiResponse(data={"candidates": [candidate], "task_id": task.id})
+    get_task_runtime().wake()
+    return ApiResponse(data=task)
 
 
 @router.post("/api/projects/{project_id}/shot-images/generate", deprecated=True)
@@ -106,18 +116,25 @@ def generate_project_shot_images_endpoint(
     _raise_candidate_required("/api/projects/{project_id}/shot-images/generate-candidates")
 
 
-@router.post("/api/projects/{project_id}/shot-images/generate-candidates", response_model=ApiResponse[AssetCandidateGenerationResponse])
+@router.post(
+    "/api/projects/{project_id}/shot-images/generate-candidates",
+    response_model=ApiResponse[GenerationTaskRead],
+    status_code=status.HTTP_202_ACCEPTED,
+)
 def generate_project_shot_image_candidates_endpoint(
     project_id: str,
     image_provider_profile_id: str | None = Query(default=None),
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
     db: Session = Depends(get_db),
-) -> ApiResponse[AssetCandidateGenerationResponse]:
-    candidates, task = generate_shot_image_candidates(
+) -> ApiResponse[GenerationTaskRead]:
+    task = create_shot_image_batch_task(
         db,
         project_id,
         image_provider_profile_id=image_provider_profile_id,
+        idempotency_key=idempotency_key,
     )
-    return ApiResponse(data={"candidates": candidates, "task_id": task.id})
+    get_task_runtime().wake()
+    return ApiResponse(data=task)
 
 
 @router.post("/api/projects/{project_id}/shot-image-grid/generate", deprecated=True)
@@ -131,18 +148,25 @@ def generate_project_shot_image_grid_endpoint(
     _raise_candidate_required("/api/projects/{project_id}/shot-images/generate-candidates")
 
 
-@router.post("/api/shots/{shot_id}/image/generate-candidate", response_model=ApiResponse[AssetCandidateGenerationResponse])
+@router.post(
+    "/api/shots/{shot_id}/image/generate-candidate",
+    response_model=ApiResponse[GenerationTaskRead],
+    status_code=status.HTTP_202_ACCEPTED,
+)
 def generate_single_shot_image_candidate_endpoint(
     shot_id: str,
     image_provider_profile_id: str | None = Query(default=None),
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
     db: Session = Depends(get_db),
-) -> ApiResponse[AssetCandidateGenerationResponse]:
-    candidate, task = generate_single_shot_image_candidate(
+) -> ApiResponse[GenerationTaskRead]:
+    task = create_single_shot_image_task(
         db,
         shot_id,
         image_provider_profile_id=image_provider_profile_id,
+        idempotency_key=idempotency_key,
     )
-    return ApiResponse(data={"candidates": [candidate], "task_id": task.id})
+    get_task_runtime().wake()
+    return ApiResponse(data=task)
 
 
 @router.post("/api/projects/{project_id}/shot-videos/generate", deprecated=True)
@@ -253,18 +277,25 @@ def regenerate_image_asset_endpoint(
     _raise_candidate_required("/api/assets/{asset_id}/regenerate-candidate")
 
 
-@router.post("/api/assets/{asset_id}/regenerate-candidate", response_model=ApiResponse[AssetCandidateGenerationResponse])
+@router.post(
+    "/api/assets/{asset_id}/regenerate-candidate",
+    response_model=ApiResponse[GenerationTaskRead],
+    status_code=status.HTTP_202_ACCEPTED,
+)
 def regenerate_image_asset_candidate_endpoint(
     asset_id: str,
     image_provider_profile_id: str | None = Query(default=None),
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
     db: Session = Depends(get_db),
-) -> ApiResponse[AssetCandidateGenerationResponse]:
-    candidate, task = regenerate_image_asset_candidate(
+) -> ApiResponse[GenerationTaskRead]:
+    task = create_image_asset_regeneration_task(
         db,
         asset_id,
         image_provider_profile_id=image_provider_profile_id,
+        idempotency_key=idempotency_key,
     )
-    return ApiResponse(data={"candidates": [candidate], "task_id": task.id})
+    get_task_runtime().wake()
+    return ApiResponse(data=task)
 
 
 @router.post("/api/assets/{asset_id}/regenerate-video", deprecated=True)
@@ -295,18 +326,25 @@ def regenerate_video_asset_candidate_endpoint(
     return ApiResponse(data=task)
 
 
-@router.post("/api/assets/{asset_id}/extract-frame", response_model=ApiResponse[AssetCandidateGenerationResponse])
+@router.post(
+    "/api/assets/{asset_id}/extract-frame",
+    response_model=ApiResponse[GenerationTaskRead],
+    status_code=status.HTTP_202_ACCEPTED,
+)
 def extract_video_frame_candidate_endpoint(
     asset_id: str,
     time_sec: float = Query(default=0, ge=0),
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
     db: Session = Depends(get_db),
-) -> ApiResponse[AssetCandidateGenerationResponse]:
-    candidate, task = extract_video_frame_candidate(
+) -> ApiResponse[GenerationTaskRead]:
+    task = create_video_frame_extraction_task(
         db,
         asset_id,
         time_sec=Decimal(str(time_sec)),
+        idempotency_key=idempotency_key,
     )
-    return ApiResponse(data={"candidates": [candidate], "task_id": task.id})
+    get_task_runtime().wake()
+    return ApiResponse(data=task)
 
 
 @router.delete("/api/assets/{asset_id}", status_code=status.HTTP_204_NO_CONTENT)

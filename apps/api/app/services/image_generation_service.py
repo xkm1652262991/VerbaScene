@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import base64
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from hashlib import blake2b
 from io import BytesIO
@@ -61,13 +62,26 @@ from app.services.media_generation_support import (
     with_avd_asset_usage,
 )
 from app.services.media_storage_service import materialize_data_uri
-from app.services.task_service import mark_task_failed, update_task_progress
+from app.services.task_service import mark_task_failed, mark_task_succeeded, update_task_progress
 from app.services.workflow_state_service import (
     mark_downstream_stages_pending,
     mark_stage_failed,
     mark_stage_ready,
     mark_stage_running,
 )
+
+
+@dataclass(frozen=True)
+class ImageCandidateTarget:
+    project_id: str
+    entity_type: str
+    entity_id: str
+    asset_role: str
+    variant_key: str | None
+    label: str
+    prompt: str
+    negative_prompt: str | None
+    asset_resolution: AssetResolution | None
 
 
 def generate_reference_images(db: Session, project_id: str) -> tuple[list[Asset], GenerationTask]:
@@ -142,6 +156,7 @@ def generate_reference_images(db: Session, project_id: str) -> tuple[list[Asset]
             project_id,
             "images",
             summary=message,
+            task_id=task.id,
             error_code=failure_code,
             failure_reason=normalize_failure_reason(code=failure_code, message=message, raw_response=raw_response, stage="images"),
         )
@@ -243,6 +258,7 @@ def generate_reference_image_candidates(
             project_id,
             "images",
             summary=message,
+            task_id=task.id,
             error_code=failure_code,
             failure_reason=normalize_failure_reason(code=failure_code, message=message, raw_response=raw_response, stage="images"),
         )
@@ -362,6 +378,7 @@ def generate_single_reference_image_candidate(
             project_id,
             "images",
             summary=message,
+            task_id=task.id,
             error_code=failure_code,
             failure_reason=normalize_failure_reason(
                 code=failure_code,
@@ -463,6 +480,7 @@ def generate_shot_images(db: Session, project_id: str) -> tuple[list[Asset], Gen
             project_id,
             "images",
             summary=message,
+            task_id=task.id,
             error_code=failure_code,
             failure_reason=normalize_failure_reason(code=failure_code, message=message, raw_response=raw_response, stage="images"),
         )
@@ -573,6 +591,7 @@ def generate_shot_image_candidates(
             project_id,
             "images",
             summary=message,
+            task_id=task.id,
             error_code=failure_code,
             failure_reason=normalize_failure_reason(code=failure_code, message=message, raw_response=raw_response, stage="images"),
         )
@@ -670,6 +689,7 @@ def generate_single_shot_image_candidate(
             project.id,
             "images",
             summary=message,
+            task_id=task.id,
             error_code=code or "single_shot_image_candidate_generation_failed",
             failure_reason=normalize_failure_reason(
                 code=code or "single_shot_image_candidate_generation_failed",
@@ -807,6 +827,7 @@ def generate_shot_image_grid(
             project_id,
             "images",
             summary=message,
+            task_id=task.id,
             error_code=failure_code,
             failure_reason=normalize_failure_reason(code=failure_code, message=message, raw_response=raw_response, stage="images"),
         )
@@ -1064,6 +1085,464 @@ def regenerate_image_candidate_from_candidate(
 
     finish_candidate_generation_task(db, task, [candidate])
     return candidate, task
+
+
+def prepare_reference_image_candidate_targets(
+    db: Session,
+    project_id: str,
+    *,
+    entity_type: str | None = None,
+    entity_id: str | None = None,
+    asset_role: str | None = None,
+    variant_key: str = "base",
+) -> list[ImageCandidateTarget]:
+    """Compile reference-image targets without submitting generation requests."""
+    project = get_project_or_404(db, project_id)
+    characters, scenes, props = get_current_approved_entities(db, project_id)
+    resolution = resolve_generation_assets(db, project_id, stage="reference_image")
+    if entity_type is None:
+        targets: list[ImageCandidateTarget] = []
+        for character in characters:
+            if not asset_spec_reference_required(character.asset_spec):
+                continue
+            targets.append(
+                ImageCandidateTarget(
+                    project_id=project_id,
+                    entity_type="character",
+                    entity_id=character.id,
+                    asset_role="character_main_ref",
+                    variant_key="base",
+                    label=character.name,
+                    prompt=character_reference_prompt(
+                        character,
+                        _visual_style(project),
+                        "character_main_ref",
+                    ),
+                    negative_prompt=reference_negative_prompt(
+                        character,
+                        "character_main_ref",
+                    ),
+                    asset_resolution=resolution,
+                )
+            )
+        for scene in scenes:
+            if not asset_spec_reference_required(scene.asset_spec):
+                continue
+            targets.append(
+                ImageCandidateTarget(
+                    project_id=project_id,
+                    entity_type="scene",
+                    entity_id=scene.id,
+                    asset_role="scene_ref",
+                    variant_key="base",
+                    label=scene.name,
+                    prompt=scene_reference_prompt(scene, _visual_style(project)),
+                    negative_prompt=reference_negative_prompt(scene, "scene_ref"),
+                    asset_resolution=resolution,
+                )
+            )
+        if not targets:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="No approved characters or scenes require reference images",
+            )
+        return targets
+
+    allowed_roles = {
+        "character": {"character_main_ref"},
+        "scene": {"scene_ref"},
+        "prop": {"prop_ref"},
+    }
+    if (
+        entity_type not in allowed_roles
+        or asset_role not in allowed_roles[entity_type]
+        or not entity_id
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Unsupported reference image target",
+        )
+    entity_groups: dict[str, list[Character] | list[Scene] | list[Prop]] = {
+        "character": characters,
+        "scene": scenes,
+        "prop": props,
+    }
+    entity = next(
+        (item for item in entity_groups[entity_type] if item.id == entity_id),
+        None,
+    )
+    if entity is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Approved reference image entity not found",
+        )
+    if isinstance(entity, Character) and (variant_key.strip() or "base") != "base":
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Character state variants are prompt-only; generate the base multi-view reference instead",
+        )
+    normalized_variant, variant_description = _resolve_state_variant(entity, variant_key)
+    if isinstance(entity, Character):
+        prompt = character_reference_prompt(entity, _visual_style(project), asset_role)
+    elif isinstance(entity, Scene):
+        prompt = scene_reference_prompt(entity, _visual_style(project))
+    else:
+        prompt = prop_reference_prompt(entity, _visual_style(project))
+    if variant_description:
+        prompt = f"{prompt}；剧情状态变体：{variant_description}"
+    return [
+        ImageCandidateTarget(
+            project_id=project_id,
+            entity_type=entity_type,
+            entity_id=entity.id,
+            asset_role=asset_role,
+            variant_key=normalized_variant,
+            label=entity.name,
+            prompt=prompt,
+            negative_prompt=reference_negative_prompt(entity, asset_role),
+            asset_resolution=resolution,
+        )
+    ]
+
+
+def prepare_shot_image_candidate_targets(
+    db: Session,
+    project_id: str,
+    *,
+    shot_id: str | None = None,
+) -> list[ImageCandidateTarget]:
+    """Compile current storyboard-image targets without calling the Provider."""
+    project = get_project_or_404(db, project_id)
+    requested_ids = {shot_id} if shot_id else None
+    assert_project_pre_image_requirements(db, project_id, shot_ids=requested_ids)
+    statement = (
+        select(Shot)
+        .where(Shot.project_id == project_id)
+        .where(Shot.is_current.is_(True))
+        .order_by(Shot.shot_no)
+    )
+    if shot_id:
+        statement = statement.where(Shot.id == shot_id)
+    shots = list(db.scalars(statement).all())
+    if not shots:
+        detail = "Shot not found" if shot_id else "Video segments are required before storyboard image generation"
+        raise HTTPException(
+            status_code=(status.HTTP_404_NOT_FOUND if shot_id else status.HTTP_409_CONFLICT),
+            detail=detail,
+        )
+    targets: list[ImageCandidateTarget] = []
+    for shot in shots:
+        prompt_data = _shot_image_prompt_data(
+            shot,
+            "shot_storyboard",
+            style=_visual_style(project),
+        )
+        resolution = resolve_generation_assets(
+            db,
+            project_id,
+            stage="shot_image",
+            shot=shot,
+            visible_character_ids=prompt_data["visible_character_ids"],
+            visible_prop_ids=prompt_data["visible_prop_ids"],
+        )
+        targets.append(
+            ImageCandidateTarget(
+                project_id=project_id,
+                entity_type="shot",
+                entity_id=shot.id,
+                asset_role="shot_storyboard",
+                variant_key=None,
+                label=f"镜头 {shot.shot_no}",
+                prompt=prompt_data["positive_prompt"],
+                negative_prompt=prompt_data["negative_prompt"],
+                asset_resolution=resolution,
+            )
+        )
+    return targets
+
+
+def prepare_image_regeneration_candidate_target(
+    db: Session,
+    source: Asset | AssetCandidate,
+) -> ImageCandidateTarget:
+    """Freeze the current prompt and references for an explicit regeneration."""
+    if source.asset_type != "image":
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Only image assets can be regenerated",
+        )
+    if not source.entity_type or not source.entity_id:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Image target is missing",
+        )
+    prompt_data = _stored_image_prompt_for_target(
+        db,
+        project_id=source.project_id,
+        entity_type=source.entity_type,
+        entity_id=source.entity_id,
+        asset_role=source.asset_role,
+    )
+    variant_key = source.variant_key or (
+        "base" if source.entity_type in {"character", "scene", "prop"} else None
+    )
+    prompt = _prompt_with_state_variant(
+        db,
+        entity_type=source.entity_type,
+        entity_id=source.entity_id,
+        variant_key=variant_key,
+        prompt=prompt_data["positive_prompt"],
+    )
+    resolution = _resolve_image_generation_context_for_target(
+        db,
+        project_id=source.project_id,
+        entity_type=source.entity_type,
+        entity_id=source.entity_id,
+        asset_role=source.asset_role,
+        prompt_data=prompt_data,
+    )
+    return ImageCandidateTarget(
+        project_id=source.project_id,
+        entity_type=source.entity_type,
+        entity_id=source.entity_id,
+        asset_role=source.asset_role or infer_asset_role(
+            asset_type="image",
+            entity_type=source.entity_type,
+            entity_id=source.entity_id,
+        ),
+        variant_key=variant_key,
+        label=f"{source.entity_type}:{source.entity_id}",
+        prompt=prompt,
+        negative_prompt=prompt_data["negative_prompt"],
+        asset_resolution=resolution,
+    )
+
+
+def image_candidate_provider_profile_id(candidate: AssetCandidate) -> str | None:
+    return _candidate_image_provider_profile_id(candidate)
+
+
+def compile_image_candidate_task_input(
+    db: Session,
+    *,
+    task_id: str,
+    project_id: str,
+    entity_type: str,
+    entity_id: str,
+    asset_role: str | None,
+    variant_key: str | None,
+    prompt: str,
+    negative_prompt: str | None,
+    asset_resolution: AssetResolution | None,
+    image_provider_selection: ImageProviderSelection,
+    operation: str,
+    source_asset_id: str | None = None,
+    source_asset_version: int | None = None,
+    source_candidate_id: str | None = None,
+    source_candidate_version: int | None = None,
+    extra_params: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Freeze a single image candidate request without calling the Provider."""
+    provider = image_provider_selection.provider
+    resolved_asset_role = asset_role or infer_asset_role(
+        asset_type="image",
+        entity_type=entity_type,
+        entity_id=entity_id,
+    )
+    resolved_variant_key = variant_key or (
+        "base" if entity_type in {"character", "scene", "prop"} else None
+    )
+    candidate_version = next_candidate_version(
+        db,
+        project_id,
+        "image",
+        entity_type,
+        entity_id,
+        resolved_asset_role,
+        resolved_variant_key,
+    )
+    generation_params, generation_seed, seed_strategy = _image_generation_params(
+        task_id=task_id,
+        target_kind="candidate",
+        entity_type=entity_type,
+        entity_id=entity_id,
+        asset_role=resolved_asset_role,
+        version=candidate_version,
+        extra_params=extra_params,
+    )
+    reference_transport = _normalize_reference_transport(
+        str(
+            image_provider_selection.default_params.get(
+                "reference_transport",
+                settings.image_reference_transport,
+            )
+        )
+    )
+    resolution_payload = _asset_resolution_payload(asset_resolution, provider=provider)
+    request_metadata = with_avd_asset_usage(
+        {
+            "entity_type": entity_type,
+            "entity_id": entity_id,
+            "asset_role": resolved_asset_role,
+            "variant_key": resolved_variant_key,
+            "asset_reference_transport": reference_transport,
+            "asset_resolution": resolution_payload,
+            "candidate_policy": "pending_review_before_asset",
+            "generation_seed": generation_seed,
+            "seed_strategy": seed_strategy,
+            "image_provider_profile_id": image_provider_selection.profile_id,
+            "image_provider_profile_source": image_provider_selection.source,
+        },
+        asset_type="image",
+        asset_role=resolved_asset_role,
+        entity_type=entity_type,
+        variant_key=resolved_variant_key,
+    )
+    references = (
+        list(asset_resolution.references)
+        if asset_resolution is not None and reference_transport in {"payload", "hybrid"}
+        else []
+    )
+    return {
+        "operation": operation,
+        "entity_type": entity_type,
+        "entity_id": entity_id,
+        "shot_id": entity_id if entity_type == "shot" else None,
+        "asset_role": resolved_asset_role,
+        "variant_key": resolved_variant_key,
+        "candidate_version": candidate_version,
+        "candidate_policy": "pending_review_before_asset",
+        "source_asset_id": source_asset_id,
+        "source_asset_version": source_asset_version,
+        "source_candidate_id": source_candidate_id,
+        "source_candidate_version": source_candidate_version,
+        "image_provider_profile_id": image_provider_selection.profile_id,
+        "asset_resolution": asset_resolution.to_task_payload() if asset_resolution else None,
+        "provider_request": {
+            "model": provider.model,
+            "prompt": prompt,
+            "negative_prompt": negative_prompt,
+            "references": references,
+            "params": {
+                **image_provider_selection.default_params,
+                "asset_reference_transport": reference_transport,
+                "asset_reference_metadata": (
+                    dict(asset_resolution.reference_metadata)
+                    if asset_resolution is not None
+                    else {}
+                ),
+                **generation_params,
+            },
+            "metadata": request_metadata,
+        },
+        "request_metadata": request_metadata,
+    }
+
+
+def persist_image_candidate_task_result(
+    db: Session,
+    task: GenerationTask,
+    response: ProviderResponse,
+) -> AssetCandidate:
+    """Persist one Provider result and complete its task in one short transaction."""
+    payload = task.input_payload if isinstance(task.input_payload, dict) else {}
+    request_payload = payload.get("provider_request")
+    if not isinstance(request_payload, dict):
+        raise ValueError("Image task provider request snapshot is missing")
+    entity_type = str(payload.get("entity_type") or "")
+    entity_id = str(payload.get("entity_id") or "")
+    if not entity_type or not entity_id:
+        raise ValueError("Image task target snapshot is missing")
+    candidate = _persist_provider_image_candidate(
+        db,
+        project_id=task.project_id,
+        entity_type=entity_type,
+        entity_id=entity_id,
+        asset_role=str(payload.get("asset_role") or "") or None,
+        variant_key=(
+            str(payload.get("variant_key"))
+            if payload.get("variant_key") is not None
+            else None
+        ),
+        provider_name=str(task.provider or ""),
+        model=str(task.model or request_payload.get("model") or ""),
+        prompt=str(request_payload.get("prompt") or ""),
+        negative_prompt=(
+            str(request_payload.get("negative_prompt"))
+            if request_payload.get("negative_prompt") is not None
+            else None
+        ),
+        response=response,
+        source_task_id=task.id,
+        request_metadata=(
+            payload.get("request_metadata")
+            if isinstance(payload.get("request_metadata"), dict)
+            else {}
+        ),
+        candidate_version=int(payload.get("candidate_version") or 1),
+    )
+
+    source_candidate_id = str(payload.get("source_candidate_id") or "")
+    if source_candidate_id:
+        source_candidate = db.get(AssetCandidate, source_candidate_id)
+        if source_candidate is not None and source_candidate.status == "pending_review":
+            source_candidate.status = "rejected"
+            source_candidate.review_note = f"已由重新生成候选 {candidate.id} 替代"
+            source_candidate.rejected_at = datetime.now(timezone.utc)
+            db.add(source_candidate)
+        candidate.raw_response = {
+            **dict(candidate.raw_response or {}),
+            "regeneration": {
+                "source_candidate_id": source_candidate_id,
+                "source_candidate_version": payload.get("source_candidate_version"),
+            },
+        }
+        db.add(candidate)
+
+    mark_downstream_stages_pending(
+        db,
+        task.project_id,
+        "images",
+        summary="图片候选已更新，需要重新生成相关视频和导出",
+    )
+    if task.parent_task_id is None:
+        mark_stage_ready(
+            db,
+            task.project_id,
+            "images",
+            task_id=task.id,
+            summary="图片候选已生成，等待确认入库",
+            metadata={
+                "candidate_count": 1,
+                "kind": str(payload.get("operation") or task.task_type),
+                "candidate_id": candidate.id,
+            },
+        )
+    mark_task_succeeded(
+        db,
+        task,
+        result_payload={
+            "candidate_ids": [candidate.id],
+            "candidate_count": 1,
+            "candidate_policy": "pending_review_before_asset",
+            "generation_seeds": [
+                int(payload.get("request_metadata", {}).get("generation_seed"))
+            ]
+            if isinstance(payload.get("request_metadata"), dict)
+            and payload.get("request_metadata", {}).get("generation_seed") is not None
+            else [],
+        },
+        raw_response={
+            **dict(task.raw_response or {}),
+            "provider_result": sanitize_large_payload(response.raw_response),
+        },
+        provider_task_id=response.provider_task_id,
+    )
+    db.add(task)
+    db.commit()
+    db.refresh(candidate)
+    db.refresh(task)
+    return candidate
 
 
 def _generate_image_asset(
@@ -1385,6 +1864,7 @@ def _persist_provider_image_candidate(
     response: ProviderResponse,
     source_task_id: str | None = None,
     request_metadata: dict | None = None,
+    candidate_version: int | None = None,
 ) -> AssetCandidate:
     if response.status != ProviderStatus.SUCCEEDED or not response.assets:
         if response.error:
@@ -1414,7 +1894,7 @@ def _persist_provider_image_candidate(
     resolved_variant_key = variant_key or (
         "base" if entity_type in {"character", "scene", "prop"} else None
     )
-    version = next_candidate_version(
+    version = candidate_version or next_candidate_version(
         db,
         project_id,
         "image",

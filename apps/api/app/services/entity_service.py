@@ -270,7 +270,14 @@ def generate_entities(db: Session, project_id: str) -> tuple[list[Character], li
                 retryable=provider_response.error.is_retryable if provider_response.error else True,
             ),
         )
-        mark_stage_failed(db, project_id, "entities", summary=message, error_code=code)
+        mark_stage_failed(
+            db,
+            project_id,
+            "entities",
+            summary=message,
+            task_id=task.id,
+            error_code=code,
+        )
         db.add(task)
         db.commit()
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=message)
@@ -306,7 +313,14 @@ def generate_entities(db: Session, project_id: str) -> tuple[list[Character], li
                 provider=provider.name,
             ),
         )
-        mark_stage_failed(db, project_id, "entities", summary=message, error_code="entity_extraction_parse_failed")
+        mark_stage_failed(
+            db,
+            project_id,
+            "entities",
+            summary=message,
+            task_id=task.id,
+            error_code="entity_extraction_parse_failed",
+        )
         db.add(task)
         db.commit()
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=message) from exc

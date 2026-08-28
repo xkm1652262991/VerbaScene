@@ -4,11 +4,14 @@ from pathlib import Path
 from unittest.mock import patch
 
 from fastapi import HTTPException
+from sqlalchemy import select
 from sqlalchemy.orm import sessionmaker
 
 from app.db.session import create_database_engine, initialize_database
 from app.assets.candidate_regeneration import regenerate_asset_candidate
-from app.models import AssetCandidate, Character, Project, Shot
+from app.assets.image_task_handler import ImageCandidateTaskHandler
+from app.models import AssetCandidate, Character, GenerationTask, Project, Shot
+from app.platform.tasks.types import TaskExecutionError
 from app.providers.types import ProviderAsset, ProviderError, ProviderResponse, ProviderStatus
 from app.services.asset_candidate_service import (
     delete_asset_candidate,
@@ -123,20 +126,42 @@ class AssetCandidateRegenerationTests(unittest.TestCase):
         provider = _ImageProvider()
         with self.session_factory() as db:
             source = self._source_candidate(db)
-            with (
-                patch(
-                    "app.services.image_generation_service.resolve_image_provider_selection",
-                    return_value=self._selection(provider),
-                ) as resolve_profile,
-                patch(
-                    "app.services.image_generation_service.materialize_data_uri",
-                    side_effect=lambda _project_id, _candidate_id, uri, _mime_type: uri,
-                ),
-                patch("app.services.image_generation_service._image_consistency_check", return_value=None),
-            ):
+            with patch(
+                "app.assets.image_tasks.resolve_image_provider_selection",
+                return_value=self._selection(provider),
+            ) as resolve_profile:
                 result = regenerate_asset_candidate(db, source.id)
-                replacement, task = result.candidate, result.task
+                task = result.task
 
+            db.refresh(source)
+            self.assertEqual(source.status, "pending_review")
+            self.assertEqual(task.status, "queued")
+            self.assertEqual(len(provider.requests), 0)
+            task_id = task.id
+            source_id = source.id
+            character_id = source.entity_id
+            resolve_profile.assert_called_once_with(db, "saved-qwen-profile")
+
+        with (
+            patch("app.assets.image_task_handler.SessionLocal", self.session_factory),
+            patch(
+                "app.assets.image_task_handler.resolve_image_provider_selection",
+                return_value=self._selection(provider),
+            ),
+            patch(
+                "app.services.image_generation_service.materialize_data_uri",
+                side_effect=lambda _project_id, _candidate_id, uri, _mime_type: uri,
+            ),
+            patch("app.services.image_generation_service._image_consistency_check", return_value=None),
+        ):
+            ImageCandidateTaskHandler().execute(task_id)
+
+        with self.session_factory() as db:
+            source = db.get(AssetCandidate, source_id)
+            task = db.get(GenerationTask, task_id)
+            replacement = db.scalar(
+                select(AssetCandidate).where(AssetCandidate.source_task_id == task_id)
+            )
             db.refresh(source)
             self.assertEqual(source.status, "rejected")
             self.assertIn(replacement.id, source.review_note)
@@ -144,23 +169,35 @@ class AssetCandidateRegenerationTests(unittest.TestCase):
             self.assertEqual(replacement.version, 2)
             self.assertEqual(replacement.raw_response["regeneration"]["source_candidate_id"], source.id)
             self.assertEqual(task.input_payload["source_candidate_id"], source.id)
-            resolve_profile.assert_called_once_with(db, "saved-qwen-profile")
             self.assertEqual(len(provider.requests), 1)
             prompt = provider.requests[0].prompt
             self.assertIn("视觉风格：", prompt)
-            self.assertTrue(prompt.endswith(db.get(Character, source.entity_id).fixed_prompt))
+            self.assertTrue(prompt.endswith(db.get(Character, character_id).fixed_prompt))
 
     def test_failed_generation_keeps_source_candidate_pending(self):
         provider = _ImageProvider(fail=True)
         with self.session_factory() as db:
             source = self._source_candidate(db)
             with patch(
-                "app.services.image_generation_service.resolve_image_provider_selection",
+                "app.assets.image_tasks.resolve_image_provider_selection",
                 return_value=self._selection(provider),
             ):
-                with self.assertRaises(HTTPException):
-                    regenerate_asset_candidate(db, source.id)
+                task = regenerate_asset_candidate(db, source.id).task
+            task_id = task.id
+            source_id = source.id
 
+        with (
+            patch("app.assets.image_task_handler.SessionLocal", self.session_factory),
+            patch(
+                "app.assets.image_task_handler.resolve_image_provider_selection",
+                return_value=self._selection(provider),
+            ),
+        ):
+            with self.assertRaises(TaskExecutionError):
+                ImageCandidateTaskHandler().execute(task_id)
+
+        with self.session_factory() as db:
+            source = db.get(AssetCandidate, source_id)
             db.refresh(source)
             self.assertEqual(source.status, "pending_review")
             self.assertIsNone(source.rejected_at)
@@ -207,20 +244,31 @@ class AssetCandidateRegenerationTests(unittest.TestCase):
             db.add(source)
             db.commit()
 
-            with (
-                patch(
-                    "app.services.image_generation_service.resolve_image_provider_selection",
-                    return_value=self._selection(provider),
-                ),
-                patch(
-                    "app.services.image_generation_service.materialize_data_uri",
-                    side_effect=lambda _project_id, _candidate_id, uri, _mime_type: uri,
-                ),
-                patch("app.services.image_generation_service._image_consistency_check", return_value=None),
+            with patch(
+                "app.assets.image_tasks.resolve_image_provider_selection",
+                return_value=self._selection(provider),
             ):
-                result = regenerate_asset_candidate(db, source.id)
-                replacement = result.candidate
+                task = regenerate_asset_candidate(db, source.id).task
+            task_id = task.id
 
+        with (
+            patch("app.assets.image_task_handler.SessionLocal", self.session_factory),
+            patch(
+                "app.assets.image_task_handler.resolve_image_provider_selection",
+                return_value=self._selection(provider),
+            ),
+            patch(
+                "app.services.image_generation_service.materialize_data_uri",
+                side_effect=lambda _project_id, _candidate_id, uri, _mime_type: uri,
+            ),
+            patch("app.services.image_generation_service._image_consistency_check", return_value=None),
+        ):
+            ImageCandidateTaskHandler().execute(task_id)
+
+        with self.session_factory() as db:
+            replacement = db.scalar(
+                select(AssetCandidate).where(AssetCandidate.source_task_id == task_id)
+            )
             self.assertEqual(provider.requests[0].negative_prompt, "当前镜头负面提示词，完整人物")
             self.assertEqual(replacement.negative_prompt, "当前镜头负面提示词，完整人物")
 

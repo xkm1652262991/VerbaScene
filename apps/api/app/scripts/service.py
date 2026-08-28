@@ -264,6 +264,7 @@ def execute_script_generation_task(db: Session, task_id: str) -> tuple[Script, G
             project.id,
             "script",
             summary=exc.message,
+            task_id=task.id,
             error_code=failure_code,
         )
         db.add(task)

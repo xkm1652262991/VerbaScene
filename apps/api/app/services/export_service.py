@@ -6,6 +6,8 @@ import tempfile
 from dataclasses import dataclass
 from decimal import Decimal
 from pathlib import Path
+from types import SimpleNamespace
+from typing import Any
 from uuid import NAMESPACE_URL, uuid5
 
 from fastapi import HTTPException, status
@@ -15,9 +17,10 @@ from sqlalchemy.orm import Session
 
 from app.agents import total_duration
 from app.core.config import settings
-from app.models import Asset, Dialogue, Export, Project, Shot
+from app.models import Asset, Dialogue, Export, GenerationTask, Project, Shot
 from app.platform.media import get_media_store
 from app.services.workflow_state_service import mark_stage_failed, mark_stage_ready, mark_stage_running
+from app.services.task_service import mark_task_succeeded
 
 
 @dataclass(frozen=True)
@@ -199,6 +202,282 @@ def compose_project(
     db.refresh(asset)
     db.refresh(export)
     shutil.rmtree(output_path.parent, ignore_errors=True)
+    return export, asset
+
+
+def compile_export_task_input(
+    db: Session,
+    project_id: str,
+    *,
+    subtitle_mode: str,
+) -> dict[str, Any]:
+    """Freeze an export timeline without running ffprobe or FFmpeg."""
+    if subtitle_mode not in {"none", "en", "bilingual"}:
+        raise HTTPException(status_code=422, detail="Unsupported subtitle mode")
+    project = get_project_or_404(db, project_id)
+    shots = _current_shots_for_export(db, project_id)
+    video_assets = _require_selected_assets_for_entities(
+        db,
+        project_id,
+        "video",
+        "shot",
+        [shot.id for shot in shots],
+    )
+    dialogues = _dialogues(db, project_id)
+    duration_sec = total_duration(shots)
+    version = _next_asset_version(
+        db,
+        project_id,
+        "final_video",
+        "project",
+        project_id,
+        "final_export",
+    )
+    return {
+        "project_id": project_id,
+        "subtitle_mode": subtitle_mode,
+        "resolution": project.resolution,
+        "duration_sec": str(duration_sec),
+        "version": version,
+        "shots": [
+            {
+                "id": shot.id,
+                "shot_no": shot.shot_no,
+                "duration_sec": str(shot.duration_sec or 0),
+                "shot_card": dict(shot.shot_card or {}),
+            }
+            for shot in shots
+        ],
+        "video_assets": [
+            {
+                "id": asset.id,
+                "uri": asset.uri,
+                "version": asset.version,
+                "duration_sec": (
+                    str(asset.duration_sec) if asset.duration_sec is not None else None
+                ),
+                "mime_type": asset.mime_type,
+            }
+            for asset in video_assets
+        ],
+        "dialogues": [
+            {
+                "id": dialogue.id,
+                "shot_id": dialogue.shot_id,
+                "beat_id": dialogue.beat_id,
+                "sequence_order": dialogue.sequence_order,
+                "start_time": (
+                    str(dialogue.start_time) if dialogue.start_time is not None else None
+                ),
+                "end_time": (
+                    str(dialogue.end_time) if dialogue.end_time is not None else None
+                ),
+                "text": dialogue.text,
+                "translation_zh": dialogue.translation_zh,
+            }
+            for dialogue in dialogues
+        ],
+    }
+
+
+def build_export_ffmpeg_args_from_snapshot(
+    snapshot: dict[str, Any],
+    output_path: Path,
+) -> tuple[list[str], dict[str, Any]]:
+    shots = [
+        SimpleNamespace(
+            id=str(item.get("id") or ""),
+            shot_no=int(item.get("shot_no") or 0),
+            duration_sec=Decimal(str(item.get("duration_sec") or 0)),
+            shot_card=dict(item.get("shot_card") or {}),
+        )
+        for item in snapshot.get("shots") or []
+        if isinstance(item, dict)
+    ]
+    asset_rows = [
+        item
+        for item in snapshot.get("video_assets") or []
+        if isinstance(item, dict)
+    ]
+    video_assets = [SimpleNamespace(uri=str(item.get("uri") or "")) for item in asset_rows]
+    dialogues = [
+        SimpleNamespace(
+            id=str(item.get("id") or ""),
+            shot_id=item.get("shot_id"),
+            beat_id=item.get("beat_id"),
+            sequence_order=int(item.get("sequence_order") or 0),
+            start_time=(
+                Decimal(str(item.get("start_time")))
+                if item.get("start_time") is not None
+                else None
+            ),
+            end_time=(
+                Decimal(str(item.get("end_time")))
+                if item.get("end_time") is not None
+                else None
+            ),
+            text=str(item.get("text") or ""),
+            translation_zh=(
+                str(item.get("translation_zh"))
+                if item.get("translation_zh") is not None
+                else None
+            ),
+        )
+        for item in snapshot.get("dialogues") or []
+        if isinstance(item, dict)
+    ]
+    if not shots or len(shots) != len(video_assets):
+        raise ValueError("Frozen export timeline is incomplete")
+    duration_sec = Decimal(str(snapshot.get("duration_sec") or 0))
+    subtitle_mode = str(snapshot.get("subtitle_mode") or "none")
+    video_has_audio = [_probe_has_audio(asset.uri) for asset in video_assets]
+    subtitle_cues = (
+        []
+        if subtitle_mode == "none"
+        else _dialogue_subtitle_cues(
+            dialogues=dialogues,
+            shots=shots,
+            mode=subtitle_mode,
+        )
+    )
+    args = _build_ffmpeg_args(
+        resolution=str(snapshot.get("resolution") or "854x480"),
+        duration_sec=duration_sec,
+        video_assets=video_assets,
+        video_durations=[Decimal(str(shot.duration_sec or 0)) for shot in shots],
+        video_has_audio=video_has_audio,
+        subtitle_cues=subtitle_cues,
+        output_path=output_path,
+    )
+    manifest = {
+        "shots": [
+            {
+                "shot_id": shot.id,
+                "shot_no": shot.shot_no,
+                "duration_sec": str(shot.duration_sec or 0),
+                "video_asset_id": asset_row.get("id"),
+                "video_asset_version": asset_row.get("version"),
+                "native_audio": has_audio,
+                "audio_policy": "preserve_native" if has_audio else "inject_silence",
+            }
+            for shot, asset_row, has_audio in zip(
+                shots,
+                asset_rows,
+                video_has_audio,
+                strict=True,
+            )
+        ],
+        "subtitle_mode": subtitle_mode,
+        "subtitle_cue_count": len(subtitle_cues),
+        "dialogue_ids": [dialogue.id for dialogue in dialogues],
+    }
+    return args, manifest
+
+
+def persist_export_task_result(
+    db: Session,
+    task: GenerationTask,
+    *,
+    output_uri: str,
+    ffmpeg_args: list[str],
+    manifest: dict[str, Any],
+) -> tuple[Export, Asset]:
+    snapshot = task.input_payload if isinstance(task.input_payload, dict) else {}
+    resolution = str(snapshot.get("resolution") or "854x480")
+    duration_sec = Decimal(str(snapshot.get("duration_sec") or 0))
+    subtitle_mode = str(snapshot.get("subtitle_mode") or "none")
+    version = int(snapshot.get("version") or 1)
+    ffmpeg_command = shlex.join(ffmpeg_args)
+    db.execute(
+        update(Asset)
+        .where(Asset.project_id == task.project_id)
+        .where(Asset.asset_type == "final_video")
+        .where(Asset.asset_role == "final_export")
+        .where(Asset.entity_type == "project")
+        .where(Asset.entity_id == task.project_id)
+        .values(is_selected=False)
+    )
+    width, height = _parse_resolution(resolution)
+    stored_path = get_media_store().resolve_local_path(output_uri)
+    asset = Asset(
+        project_id=task.project_id,
+        asset_type="final_video",
+        asset_role="final_export",
+        entity_type="project",
+        entity_id=task.project_id,
+        source_task_id=task.id,
+        version=version,
+        uri=output_uri,
+        mime_type="video/mp4",
+        width=width,
+        height=height,
+        duration_sec=duration_sec,
+        provider="local",
+        model="ffmpeg",
+        prompt=(
+            "Concatenate selected video clips with native audio; "
+            f"subtitle_mode={subtitle_mode}"
+        ),
+        raw_response={
+            "mode": "ffmpeg",
+            "ffmpeg_command": ffmpeg_command,
+            "manifest": manifest,
+            "output_path": str(stored_path),
+        },
+        status="approved",
+        is_selected=True,
+    )
+    db.add(asset)
+    db.flush()
+    export = Export(
+        project_id=task.project_id,
+        asset_id=asset.id,
+        resolution=resolution,
+        duration_sec=duration_sec,
+        format="mp4",
+        subtitle_mode=subtitle_mode,
+        ffmpeg_command=ffmpeg_command,
+        status="completed",
+    )
+    db.add(export)
+    project = db.get(Project, task.project_id)
+    if project is not None:
+        project.status = "exported"
+        db.add(project)
+    mark_stage_ready(
+        db,
+        task.project_id,
+        "export",
+        task_id=task.id,
+        summary=f"成片版本 {version} 已导出",
+        metadata={
+            "export_id": export.id,
+            "asset_id": asset.id,
+            "version": version,
+            "subtitle_mode": subtitle_mode,
+        },
+    )
+    mark_task_succeeded(
+        db,
+        task,
+        output_asset_ids=[asset.id],
+        result_payload={
+            "export_id": export.id,
+            "asset_id": asset.id,
+            "version": version,
+            "subtitle_mode": subtitle_mode,
+        },
+        raw_response={
+            **dict(task.raw_response or {}),
+            "ffmpeg_command": ffmpeg_command,
+            "manifest": manifest,
+        },
+    )
+    db.add(task)
+    db.commit()
+    db.refresh(asset)
+    db.refresh(export)
+    db.refresh(task)
     return export, asset
 
 

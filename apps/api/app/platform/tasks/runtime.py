@@ -38,6 +38,7 @@ class LocalTaskRuntime:
         poll_interval_sec: float = 0.5,
         lease_seconds: int = 60,
         heartbeat_seconds: int = 15,
+        image_concurrency: int = 2,
         video_concurrency: int = 2,
     ) -> None:
         self.session_factory = session_factory
@@ -45,6 +46,7 @@ class LocalTaskRuntime:
         self.poll_interval_sec = max(0.05, poll_interval_sec)
         self.lease_seconds = max(2, lease_seconds)
         self.heartbeat_seconds = max(1, min(heartbeat_seconds, self.lease_seconds // 2))
+        self.image_concurrency = max(1, min(image_concurrency, 2))
         self.video_concurrency = max(1, min(video_concurrency, 2))
         self.runtime_id = f"{socket.gethostname()}:{uuid4().hex[:12]}"
         self._handlers: dict[str, TaskHandler] = {}
@@ -82,7 +84,12 @@ class LocalTaskRuntime:
                 return
             self._started = True
             self._stop_event.clear()
-            workers = [(TaskLane.SCRIPT, 1), (TaskLane.VIDEO, self.video_concurrency)]
+            workers = [
+                (TaskLane.SCRIPT, 1),
+                (TaskLane.IMAGE, self.image_concurrency),
+                (TaskLane.VIDEO, self.video_concurrency),
+                (TaskLane.MEDIA, 1),
+            ]
             for lane, count in workers:
                 if not any(handler.lane == lane for handler in self._handlers.values()):
                     continue
@@ -347,6 +354,7 @@ def get_task_runtime() -> LocalTaskRuntime:
                 poll_interval_sec=settings.task_poll_interval_sec,
                 lease_seconds=settings.task_lease_sec,
                 heartbeat_seconds=settings.task_heartbeat_sec,
+                image_concurrency=settings.image_generation_concurrency,
                 video_concurrency=settings.video_generation_concurrency,
             )
         return _runtime

@@ -12,6 +12,14 @@ class TaskApiContractTests(unittest.TestCase):
             "/api/shots/{shot_id}/video/generate-candidate",
             "/api/projects/{project_id}/shot-videos/generate-candidates",
             "/api/assets/{asset_id}/regenerate-video-candidate",
+            "/api/projects/{project_id}/reference-images/generate-candidates",
+            "/api/projects/{project_id}/reference-images/generate-candidate",
+            "/api/projects/{project_id}/shot-images/generate-candidates",
+            "/api/shots/{shot_id}/image/generate-candidate",
+            "/api/assets/{asset_id}/regenerate-candidate",
+            "/api/asset-candidates/{candidate_id}/regenerate",
+            "/api/assets/{asset_id}/extract-frame",
+            "/api/projects/{project_id}/compose",
         ):
             operation = schema["paths"][path]["post"]
             self.assertIn("202", operation["responses"], path)

@@ -48,6 +48,7 @@ class Settings(BaseSettings):
     image_api_key: str | None = None
     image_base_url: str | None = None
     image_model: str = "mock-image"
+    image_generation_concurrency: int = 2
     image_size: str = "1280x720"
     image_response_format: str = "b64_json"
     image_reference_transport: str = "hybrid"

@@ -38,7 +38,7 @@ VerbaScene 是一个面向内部内容生产的 AIGC 工作台：将创意描述
 | 剧本 | AI 创意与导入剧本两种入口；结构化剧本；A1 英文对白；可选中文释义；生成、审稿和定点修订记录 |
 | 资产 | 角色、场景、道具；剧情状态变体；图片候选；采用/拒绝；历史版本；引用关系 |
 | 视频制作 | Shot 与内部 beats；可编辑最终 Prompt；参考资产；可选显式首帧；视频候选与采用版本 |
-| 任务 | 数据库真相源；租约/心跳恢复；剧本和视频统一 Worker；父子批次；取消、人工重试与资源级去重 |
+| 任务 | 数据库真相源；租约/心跳恢复；文本、图片、视频与 FFmpeg 统一 Worker；父子批次；取消、人工重试与资源级去重 |
 | 导出 | FFmpeg 拼接；保留视频原生音轨；无音轨片段补静音；无字幕、英文、中英双语三种模式 |
 | 数据 | Docker 默认 PostgreSQL；SQLite 开发后备；Alembic 迁移；本地文件存储 |
 | 模型 | Mock、OpenAI-compatible、DashScope、Gemini、ComfyUI、Seedance、LTX、MiniMax H3、Wan 等 Adapter 目录 |
@@ -55,7 +55,7 @@ flowchart LR
   DOMAIN --> FILES["LocalMediaStore"]
   DOMAIN --> RUNTIME["租约式本地任务运行时"]
   RUNTIME --> PROVIDERS["LLM / Image / Video Adapters"]
-  DOMAIN --> FFMPEG["FFmpeg 合成与字幕"]
+  RUNTIME --> FFMPEG["FFmpeg 截帧、合成与字幕"]
 ```
 
 当前任务运行时用于单 API 进程，不是 Celery 或多实例分布式队列；当前工作流也没有使用 LangGraph。详细边界见 [当前架构](docs/21-current-architecture.md) 和 [后端任务运行时](docs/26-backend-task-runtime.md)。

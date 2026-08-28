@@ -14,12 +14,12 @@ FastAPI
   → FFmpeg 导出
 ```
 
-剧本、单镜头视频、视频重生成和项目视频批次共用持久化
+剧本、分镜导演、图片候选、视频候选、视频抽帧和成片导出共用持久化
 `GenerationTask`。数据库是任务真相源，本地线程只负责领取、续租和唤醒。
-剧本从最后成功检查点继续；已受理的异步视频任务只恢复轮询，不会重复提交。
+剧本从最后成功检查点继续；已受理的异步 Provider 任务只恢复轮询，不会重复提交。
 
-当前没有 Celery、Redis 队列、LangGraph 或多实例 Worker。图片生成与 FFmpeg
-导出仍是同步 API。
+当前没有 Celery、Redis 队列、LangGraph 或多实例 Worker。运行时仍以单 API
+进程和本地文件系统为目标。
 
 ## 本地开发
 
@@ -88,6 +88,7 @@ SQLite 任务结构升级前会在数据库同目录生成
 ## 本地任务运行时
 
 ```env
+IMAGE_GENERATION_CONCURRENCY=2
 VIDEO_GENERATION_CONCURRENCY=2
 TASK_POLL_INTERVAL_SEC=0.5
 TASK_LEASE_SEC=60
@@ -95,8 +96,9 @@ TASK_HEARTBEAT_SEC=15
 TASK_SHUTDOWN_TIMEOUT_SEC=30
 ```
 
-剧本 Worker 固定为 1；视频 Worker 上限为 2。关闭时先停止领取新任务，再等待当前
-Handler；未完成工作可通过过期租约恢复。详细状态机和取消/重试语义见
+文本 Worker 固定为 1；图片与视频 Worker 各最多为 2；抽帧和导出共用单并发媒体
+Worker。关闭时先停止领取新任务，再等待当前 Handler；未完成工作可通过过期租约恢复。
+详细状态机和取消/重试语义见
 [`docs/26-backend-task-runtime.md`](../../docs/26-backend-task-runtime.md)。
 
 ## Provider
@@ -117,9 +119,8 @@ POST   /api/providers/test
 
 前后端合同位于 `../../docs/api/openapi.json`：
 
-> 当前后端合同是破坏性版本：视频生成与重生成端点返回
-> `202 + GenerationTask`，新增 `POST /api/tasks/{id}/cancel|retry`，并删除旧的
-> `DELETE /api/tasks/{id}/queue`。本轮没有修改前端，需后续单独适配。
+> 当前生成合同为异步版本：剧本、分镜、图片、视频、抽帧和导出端点返回
+> `202 + GenerationTask`，并通过 `POST /api/tasks/{id}/cancel|retry` 管理任务。前端已同步适配该合同。
 
 ```bash
 .venv/bin/python scripts/export_openapi.py

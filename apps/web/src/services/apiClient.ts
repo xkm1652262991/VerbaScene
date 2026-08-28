@@ -703,7 +703,7 @@ export function regenerateAssetCandidate(
   const params = new URLSearchParams();
   if (imageProviderProfileId) params.set("image_provider_profile_id", imageProviderProfileId);
   const query = params.toString();
-  return request<{ candidates: AssetCandidate[]; task_id: string } | GenerationTask>(
+  return request<GenerationTask>(
     `/api/asset-candidates/${candidateId}/regenerate${query ? `?${query}` : ""}`,
     { method: "POST", headers: idempotencyHeaders(options) },
   );
@@ -719,14 +719,19 @@ export async function deleteAssetCandidate(candidateId: string) {
   }
 }
 
-export function generateReferenceImageCandidates(projectId: string, imageProviderProfileId?: string | null) {
+export function generateReferenceImageCandidates(
+  projectId: string,
+  imageProviderProfileId?: string | null,
+  options?: GenerationTaskRequestOptions,
+) {
   const params = new URLSearchParams();
   if (imageProviderProfileId) params.set("image_provider_profile_id", imageProviderProfileId);
   const query = params.toString();
-  return request<{ candidates: AssetCandidate[]; task_id: string }>(
+  return request<GenerationTask>(
     `/api/projects/${projectId}/reference-images/generate-candidates${query ? `?${query}` : ""}`,
     {
       method: "POST",
+      headers: idempotencyHeaders(options),
     },
   );
 }
@@ -735,6 +740,7 @@ export function generateSingleReferenceImageCandidate(
   projectId: string,
   target: { entity_type: string; entity_id: string; asset_role: string; variant_key?: string },
   imageProviderProfileId?: string | null,
+  options?: GenerationTaskRequestOptions,
 ) {
   const params = new URLSearchParams({
     entity_type: target.entity_type,
@@ -743,32 +749,42 @@ export function generateSingleReferenceImageCandidate(
     variant_key: target.variant_key ?? "base",
   });
   if (imageProviderProfileId) params.set("image_provider_profile_id", imageProviderProfileId);
-  return request<{ candidates: AssetCandidate[]; task_id: string }>(
+  return request<GenerationTask>(
     `/api/projects/${projectId}/reference-images/generate-candidate?${params.toString()}`,
-    { method: "POST" },
+    { method: "POST", headers: idempotencyHeaders(options) },
   );
 }
 
-export function generateShotImageCandidates(projectId: string, imageProviderProfileId?: string | null) {
+export function generateShotImageCandidates(
+  projectId: string,
+  imageProviderProfileId?: string | null,
+  options?: GenerationTaskRequestOptions,
+) {
   const params = new URLSearchParams();
   if (imageProviderProfileId) params.set("image_provider_profile_id", imageProviderProfileId);
   const query = params.toString();
-  return request<{ candidates: AssetCandidate[]; task_id: string }>(
+  return request<GenerationTask>(
     `/api/projects/${projectId}/shot-images/generate-candidates${query ? `?${query}` : ""}`,
     {
       method: "POST",
+      headers: idempotencyHeaders(options),
     },
   );
 }
 
-export function generateSingleShotImageCandidate(shotId: string, imageProviderProfileId?: string | null) {
+export function generateSingleShotImageCandidate(
+  shotId: string,
+  imageProviderProfileId?: string | null,
+  options?: GenerationTaskRequestOptions,
+) {
   const params = new URLSearchParams();
   if (imageProviderProfileId) params.set("image_provider_profile_id", imageProviderProfileId);
   const query = params.toString();
-  return request<{ candidates: AssetCandidate[]; task_id: string }>(
+  return request<GenerationTask>(
     `/api/shots/${shotId}/image/generate-candidate${query ? `?${query}` : ""}`,
     {
       method: "POST",
+      headers: idempotencyHeaders(options),
     },
   );
 }
@@ -788,12 +804,17 @@ export function selectAsset(assetId: string) {
   });
 }
 
-export function regenerateImageAssetCandidate(assetId: string, imageProviderProfileId?: string | null) {
+export function regenerateImageAssetCandidate(
+  assetId: string,
+  imageProviderProfileId?: string | null,
+  options?: GenerationTaskRequestOptions,
+) {
   const params = new URLSearchParams();
   if (imageProviderProfileId) params.set("image_provider_profile_id", imageProviderProfileId);
   const query = params.toString();
-  return request<{ candidates: AssetCandidate[]; task_id: string }>(`/api/assets/${assetId}/regenerate-candidate${query ? `?${query}` : ""}`, {
+  return request<GenerationTask>(`/api/assets/${assetId}/regenerate-candidate${query ? `?${query}` : ""}`, {
     method: "POST",
+    headers: idempotencyHeaders(options),
   });
 }
 
@@ -804,10 +825,14 @@ export function regenerateVideoAssetCandidate(assetId: string, options?: Generat
   });
 }
 
-export function extractVideoFrameCandidate(assetId: string, timeSec = 0) {
-  return request<{ candidates: AssetCandidate[]; task_id: string }>(
+export function extractVideoFrameCandidate(
+  assetId: string,
+  timeSec = 0,
+  options?: GenerationTaskRequestOptions,
+) {
+  return request<GenerationTask>(
     `/api/assets/${assetId}/extract-frame?time_sec=${encodeURIComponent(timeSec)}`,
-    { method: "POST" },
+    { method: "POST", headers: idempotencyHeaders(options) },
   );
 }
 
@@ -917,9 +942,14 @@ export async function getProjectExports(projectId: string) {
   return response.items;
 }
 
-export function composeProject(projectId: string, subtitleMode: SubtitleMode = "none") {
-  return request<{ export: ExportRecord; asset: Asset }>(`/api/projects/${projectId}/compose`, {
+export function composeProject(
+  projectId: string,
+  subtitleMode: SubtitleMode = "none",
+  options?: GenerationTaskRequestOptions,
+) {
+  return request<GenerationTask>(`/api/projects/${projectId}/compose`, {
     method: "POST",
+    headers: idempotencyHeaders(options),
     body: JSON.stringify({ subtitle_mode: subtitleMode }),
   });
 }

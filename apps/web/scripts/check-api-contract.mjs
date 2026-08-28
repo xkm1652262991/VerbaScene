@@ -33,6 +33,10 @@ const requiredOperations = [
   ["post", "/api/asset-candidates/{candidate_id}/promote"],
   ["post", "/api/asset-candidates/{candidate_id}/reject"],
   ["post", "/api/asset-candidates/{candidate_id}/regenerate"],
+  ["post", "/api/projects/{project_id}/reference-images/generate-candidates"],
+  ["post", "/api/projects/{project_id}/reference-images/generate-candidate"],
+  ["post", "/api/projects/{project_id}/shot-images/generate-candidates"],
+  ["post", "/api/shots/{shot_id}/image/generate-candidate"],
   ["post", "/api/assets/{asset_id}/select"],
   ["post", "/api/assets/{asset_id}/regenerate-candidate"],
   ["post", "/api/assets/{asset_id}/regenerate-video-candidate"],
@@ -80,16 +84,23 @@ const errors = [];
 const taskSubmissionPaths = [
   "/api/projects/{project_id}/script/generate",
   "/api/projects/{project_id}/shots/generate",
+  "/api/projects/{project_id}/reference-images/generate-candidates",
+  "/api/projects/{project_id}/reference-images/generate-candidate",
+  "/api/projects/{project_id}/shot-images/generate-candidates",
+  "/api/shots/{shot_id}/image/generate-candidate",
+  "/api/assets/{asset_id}/regenerate-candidate",
+  "/api/asset-candidates/{candidate_id}/regenerate",
   "/api/shots/{shot_id}/video/generate-candidate",
   "/api/projects/{project_id}/shot-videos/generate-candidates",
   "/api/assets/{asset_id}/regenerate-video-candidate",
+  "/api/assets/{asset_id}/extract-frame",
+  "/api/projects/{project_id}/compose",
   "/api/tasks/{task_id}/cancel",
   "/api/tasks/{task_id}/retry",
 ];
 
 const idempotentGenerationPaths = [
-  ...taskSubmissionPaths.slice(0, 5),
-  "/api/asset-candidates/{candidate_id}/regenerate",
+  ...taskSubmissionPaths.slice(0, -2),
 ];
 const requiredTaskFields = [
   "parent_task_id",
@@ -144,15 +155,6 @@ for (const field of requiredTaskFields) {
 
 if (contract.paths?.["/api/tasks/{task_id}/queue"]?.delete) {
   errors.push("Legacy DELETE /api/tasks/{task_id}/queue must not be exposed");
-}
-
-const candidateRegenerationSchema = contract.paths?.["/api/asset-candidates/{candidate_id}/regenerate"]
-  ?.post?.responses?.["200"]?.content?.["application/json"]?.schema;
-if (
-  typeof candidateRegenerationSchema?.$ref !== "string"
-  || !candidateRegenerationSchema.$ref.includes("GenerationTaskRead")
-) {
-  errors.push("Asset candidate regeneration must expose its synchronous-or-task response union");
 }
 
 if (errors.length > 0) {

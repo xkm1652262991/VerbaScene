@@ -6,8 +6,8 @@
 ## 1. 目标与范围
 
 - 数据库中的 `GenerationTask` 是任务状态真相源；内存队列只负责唤醒 Worker。
-- 本轮迁移剧本生成、单镜头视频、视频重生成和项目级视频批次。
-- 图片生成和 FFmpeg 导出仍使用同步 API。
+- 剧本、分镜、图片、视频、视频截帧和 FFmpeg 导出统一使用持久化任务。
+- 图片批量生成使用父子任务；单目标图片、截帧和导出各自拥有可恢复的 Handler。
 - 运行环境仍为单 API 进程、本地线程、SQLite 或 PostgreSQL、本地媒体目录。
 - 不引入 Celery、Redis 队列、LangGraph、对象存储、鉴权或多租户。
 
@@ -38,7 +38,9 @@ Worker 使用条件更新领取到期任务：只有 `queued` 或已到轮询时
 `lease_owner / lease_expires_at / heartbeat_at`。
 
 - 剧本并发固定为 1。
+- 图片并发读取 `IMAGE_GENERATION_CONCURRENCY`，上限为 2。
 - 视频并发读取 `VIDEO_GENERATION_CONCURRENCY`，上限为 2。
+- FFmpeg 截帧和导出共用单并发 `media` 通道，避免本机媒体任务互相争抢资源。
 - Worker 执行期间续租；Provider 调用和媒体下载期间不持有数据库事务。
 - 服务启动只回收过期租约，不把所有 `running` 任务无条件重置。
 - 服务关闭停止领取新任务；未完成任务在租约过期后可恢复。
@@ -46,6 +48,14 @@ Worker 使用条件更新领取到期任务：只有 `queued` 或已到轮询时
 剧本 Provider 调用在提交前先保存 `inflight_phase`，响应返回后再保存阶段记录。
 如果重启时只存在 `inflight_phase` 而没有响应，结果必须是
 `provider_submission_uncertain`，不得重复调用该阶段。
+
+图片任务遵守同一提交边界：提交前持久化 `submission_attempted`；同步结果返回后
+立即保存候选，异步结果先保存 `provider_task_id` 再进入 `waiting_provider`。只有
+明确 `not_submitted` 的错误可以自动重试一次；已经提交但结果未知时不得盲目重提。
+
+FFmpeg 是本地、可重复执行的确定性步骤。截帧和导出在进程退出后可以从冻结快照重跑，
+临时文件使用任务 ID 命名，成功落入 `MediaStore` 后再于短事务中建立数据库引用，
+不会产生远端重复计费。
 
 ## 4. 幂等、资源去重与重试
 
@@ -67,7 +77,7 @@ Worker 使用条件更新领取到期任务：只有 `queued` 或已到轮询时
 - Provider 不支持取消时，在下一检查点停止本地处理并忽略迟到结果。
 - 取消批次父任务会向所有非终态子任务传播取消请求。
 
-## 6. 视频 Provider 合同
+## 6. 图片与视频 Provider 合同
 
 异步视频 Adapter 的 `submit()` 只能提交任务并立即返回：
 
@@ -78,6 +88,10 @@ Worker 使用条件更新领取到期任务：只有 `queued` 或已到轮询时
 
 Worker 必须先保存远端任务 ID，再进入轮询。`poll()` 在成功时返回可下载的媒体描述，
 Provider 负责使用自身认证获取临时媒体，应用层再通过 `MediaStore` 落入项目目录。
+
+图片 Adapter 可以同步返回媒体，也可以像视频 Adapter 一样返回远端任务 ID。任务
+Handler 不把密钥写入输入快照；执行时从当前 Provider 配置解析凭据，但模型、Prompt、
+引用素材、版本号和生成参数均使用创建任务时冻结的值。
 
 `ProviderError.submission_state` 只能是：
 
@@ -95,14 +109,18 @@ Provider 负责使用自身认证获取临时媒体，应用层再通过 `MediaS
 - 全部子任务成功时父任务成功；存在失败或取消时，待全部子任务终止后父任务失败。
 - 父任务结果记录各状态数量和失败子任务 ID。
 
+图片批量生成采用相同父子模型。父任务只做汇总，每个角色、场景或片段图片槽位都是
+独立子任务。批次创建前检查全部 `resource_key`，任一目标冲突时整个事务返回 `409`，
+不会创建半个批次；子任务可独立取消、失败和人工重试。
+
 ## 8. 破坏性 API 变更
 
-- 剧本、单镜头视频、视频重生成和项目视频批次统一返回 `202 + GenerationTask`。
+- 剧本、分镜、图片、视频、视频截帧和成片导出统一返回 `202 + GenerationTask`。
 - 新增 `POST /api/tasks/{task_id}/cancel`。
 - 新增 `POST /api/tasks/{task_id}/retry`。
 - 删除 `DELETE /api/tasks/{task_id}/queue`。
 - 任务列表增加 `parent_task_id / task_type / resource_key` 过滤。
-- 当前前端不在本轮适配范围内。
+- 前端只读取规范化的任务结果，并在任务成功后刷新工作台；不得把 `202` 当作生成完成。
 
 ## 9. 数据迁移
 
@@ -122,4 +140,7 @@ PostgreSQL 使用新 Alembic revision。SQLite 继续使用本地增量迁移，
 - `app/production/video_provider_executor.py`：Provider 请求重建、结果获取和临时媒体入库。
 - `app/production/video_candidate_persistence.py`：候选版本和采用状态持久化。
 - `app/production/video_batch_coordinator.py`：父子任务汇总。
+- `app/assets/image_tasks.py`：冻结单目标图片请求、创建图片父子任务和执行 Provider 检查点。
+- `app/exports/export_tasks.py`：冻结导出时间线并执行可取消的 FFmpeg 任务。
+- `app/assets/frame_extraction_tasks.py`：冻结源视频和时间点并执行可取消的截帧任务。
 - `app/platform/tasks` 和 `app/platform/media`：不依赖具体业务页面的共享设施。

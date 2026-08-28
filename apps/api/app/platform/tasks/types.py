@@ -38,7 +38,9 @@ TERMINAL_TASK_STATUSES = frozenset(
 
 class TaskLane(StrEnum):
     SCRIPT = "script"
+    IMAGE = "image"
     VIDEO = "video"
+    MEDIA = "media"
 
 
 @dataclass(frozen=True)

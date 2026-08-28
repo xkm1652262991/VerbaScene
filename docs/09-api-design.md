@@ -22,7 +22,8 @@ PUT   /api/projects/{project_id}/dialogues
 
 ```text
 POST /api/projects/{project_id}/entities/generate
-POST /api/projects/{project_id}/reference-images/generate-candidate
+POST /api/projects/{project_id}/reference-images/generate-candidates -> 202 GenerationTask
+POST /api/projects/{project_id}/reference-images/generate-candidate  -> 202 GenerationTask
 POST /api/asset-candidates/{candidate_id}/promote
 POST /api/assets/{asset_id}/select
 POST /api/projects/{project_id}/shots/generate  -> 202 GenerationTask
@@ -30,13 +31,16 @@ PATCH /api/shots/{shot_id}
 PUT   /api/shots/{shot_id}/reference-assets
 GET   /api/shots/{shot_id}/video-prompt-preview
 POST  /api/shots/{shot_id}/compile-video-prompt
-POST  /api/shots/{shot_id}/image/generate-candidate
+POST  /api/shots/{shot_id}/image/generate-candidate -> 202 GenerationTask
 POST  /api/shots/{shot_id}/video/generate-candidate
 POST  /api/projects/{project_id}/shot-videos/generate-candidates
 POST  /api/assets/{asset_id}/regenerate-video-candidate
+POST  /api/assets/{asset_id}/regenerate-candidate -> 202 GenerationTask
+POST  /api/asset-candidates/{candidate_id}/regenerate -> 202 GenerationTask
+POST  /api/assets/{asset_id}/extract-frame -> 202 GenerationTask
 ```
 
-参考图接口接受 `variant_key`。模型输出先写入候选，采用与版本选择不改变页面可进入性。
+图片生成接口均接受可选 `Idempotency-Key`，只创建后台任务。模型输出在任务成功后写入候选，采用与版本选择不改变页面可进入性。批量参考图和片段图生成返回 `waiting_children` 父任务，每个目标创建独立子任务；任一目标已有活动任务时整批原子拒绝。单目标任务冻结 Provider、模型、Prompt、引用素材、版本号和参数，但不持久化密钥。
 
 `PUT /api/shots/{shot_id}/reference-assets` 接收按优先级排列的 `asset_ids`。服务只接受同项目、已经采用且可用的角色/场景/道具图片；当前采用版本和状态为 `approved` 的历史版本都可以精确绑定，未采用候选不可绑定；最多一个场景。绑定结果写入 `shot_card.reference_asset_ids`，同时同步 `scene_id`、`character_ids` 和 `prop_ids`，并仅把最终 Prompt 标记为可能过期。该绑定同时服务首帧和视频：首帧生成可以消费道具引用，视频生成会过滤道具图。
 
@@ -84,7 +88,7 @@ POST /api/projects/{project_id}/compose
 }
 ```
 
-支持 `none | en | bilingual`。
+返回 `202 + GenerationTask`，支持 `Idempotency-Key` 和 `none | en | bilingual`。任务创建时冻结当前采用的视频版本与 Dialogue 时间线；成功后从 `result_payload.export_id / asset_id` 获取结果。排队期间上游修改不会改变该次导出。
 
 ## 审计
 

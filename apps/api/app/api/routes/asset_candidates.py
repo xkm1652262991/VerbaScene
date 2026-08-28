@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, Header, Query, Response, status
+from fastapi import APIRouter, Depends, Header, Query, status
 from sqlalchemy.orm import Session
 
 from app.db import get_db
@@ -7,7 +7,6 @@ from app.platform.tasks.runtime import get_task_runtime
 from app.schemas.common import ApiResponse, PageResponse
 from app.schemas.asset import (
     AssetCandidateCreate,
-    AssetCandidateGenerationResponse,
     AssetCandidateRead,
     AssetCandidateReviewRequest,
     AssetRead,
@@ -75,26 +74,23 @@ def reject_asset_candidate_endpoint(
 
 @router.post(
     "/api/asset-candidates/{candidate_id}/regenerate",
-    response_model=ApiResponse[AssetCandidateGenerationResponse | GenerationTaskRead],
+    response_model=ApiResponse[GenerationTaskRead],
+    status_code=status.HTTP_202_ACCEPTED,
 )
 def regenerate_asset_candidate_endpoint(
     candidate_id: str,
-    response: Response,
     image_provider_profile_id: str | None = Query(default=None),
     idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
     db: Session = Depends(get_db),
-) -> ApiResponse[AssetCandidateGenerationResponse | GenerationTaskRead]:
+) -> ApiResponse[GenerationTaskRead]:
     result = regenerate_asset_candidate(
         db,
         candidate_id,
         image_provider_profile_id=image_provider_profile_id,
         idempotency_key=idempotency_key,
     )
-    if result.is_async:
-        response.status_code = status.HTTP_202_ACCEPTED
-        get_task_runtime().wake()
-        return ApiResponse(data=result.task)
-    return ApiResponse(data={"candidates": [result.candidate], "task_id": result.task.id})
+    get_task_runtime().wake()
+    return ApiResponse(data=result.task)
 
 
 @router.delete("/api/asset-candidates/{candidate_id}", status_code=status.HTTP_204_NO_CONTENT)

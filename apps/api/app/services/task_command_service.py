@@ -1,5 +1,14 @@
 from sqlalchemy.orm import Session
 
+from app.assets.contracts import (
+    IMAGE_CANDIDATE_TASK_TYPE,
+    MANUALLY_RETRYABLE_ASSET_TASK_TYPES,
+    VIDEO_FRAME_EXTRACTION_TASK_TYPE,
+)
+from app.exports.contracts import (
+    MANUALLY_RETRYABLE_EXPORT_TASK_TYPES,
+    PROJECT_EXPORT_TASK_TYPE,
+)
 from app.models import GenerationTask
 from app.platform.tasks.repository import TaskCreateResult, TaskRepository
 from app.platform.tasks.types import TaskStatus
@@ -23,6 +32,8 @@ MANUALLY_RETRYABLE_TASK_TYPES = (
     MANUALLY_RETRYABLE_SCRIPT_TASK_TYPES
     | MANUALLY_RETRYABLE_VIDEO_TASK_TYPES
     | MANUALLY_RETRYABLE_SHOT_DIRECTION_TASK_TYPES
+    | MANUALLY_RETRYABLE_ASSET_TASK_TYPES
+    | MANUALLY_RETRYABLE_EXPORT_TASK_TYPES
 )
 
 
@@ -60,6 +71,26 @@ def request_task_cancel(db: Session, task: GenerationTask) -> GenerationTask:
                 error_code="shot_direction_cancelled",
                 error_message="分镜导演任务已取消",
             )
+        elif task.task_type in {IMAGE_CANDIDATE_TASK_TYPE, VIDEO_FRAME_EXTRACTION_TASK_TYPE}:
+            finish_latest_stage_run(
+                db,
+                task.project_id,
+                "assets",
+                status="cancelled",
+                task_id=task.id,
+                error_code="image_task_cancelled",
+                error_message="图片任务已取消",
+            )
+        elif task.task_type == PROJECT_EXPORT_TASK_TYPE:
+            finish_latest_stage_run(
+                db,
+                task.project_id,
+                "export",
+                status="cancelled",
+                task_id=task.id,
+                error_code="export_task_cancelled",
+                error_message="导出任务已取消",
+            )
     return task
 
 
@@ -86,4 +117,18 @@ def retry_task(db: Session, source: GenerationTask) -> TaskCreateResult:
                 "videos",
                 task_id=result.task.id,
             )
+    elif source.task_type in {IMAGE_CANDIDATE_TASK_TYPE, VIDEO_FRAME_EXTRACTION_TASK_TYPE}:
+        mark_stage_running(
+            db,
+            source.project_id,
+            "images",
+            task_id=source.parent_task_id or result.task.id,
+        )
+    elif source.task_type == PROJECT_EXPORT_TASK_TYPE:
+        mark_stage_running(
+            db,
+            source.project_id,
+            "export",
+            task_id=result.task.id,
+        )
     return result

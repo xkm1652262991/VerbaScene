@@ -133,6 +133,7 @@ def mark_stage_failed(
     stage_name: str,
     *,
     summary: str,
+    task_id: str | None = None,
     error_code: str | None = None,
     failure_reason: dict[str, Any] | None = None,
 ) -> ProjectStageRun | None:
@@ -141,6 +142,7 @@ def mark_stage_failed(
         project_id,
         workspace_category(stage_name),
         status="failed",
+        task_id=task_id,
         error_code=error_code,
         error_message=summary,
         failure_reason=failure_reason,
