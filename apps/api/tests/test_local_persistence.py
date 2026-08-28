@@ -1,7 +1,9 @@
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
+from pydantic import ValidationError
 from sqlalchemy import select, text
 from sqlalchemy.orm import sessionmaker
 
@@ -13,6 +15,20 @@ from app.services.task_service import list_generation_task_progress, mark_task_r
 
 
 class LocalPersistenceTests(unittest.TestCase):
+    def test_environment_contract_accepts_json_lists_and_ignores_empty_optionals(self):
+        with patch.dict(
+            "os.environ",
+            {
+                "CORS_ORIGINS": '["http://localhost:5173"]',
+                "IMAGE_SEED": "",
+            },
+            clear=True,
+        ):
+            settings = Settings(_env_file=None)
+
+        self.assertEqual(settings.cors_origins, ["http://localhost:5173"])
+        self.assertIsNone(settings.image_seed)
+
     def test_default_database_is_project_local_sqlite(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             settings = Settings(
@@ -39,6 +55,35 @@ class LocalPersistenceTests(unittest.TestCase):
         self.assertEqual(
             settings.effective_database_url,
             "postgresql+psycopg://user:password@localhost/example",
+        )
+
+    def test_database_schema_is_validated_as_a_safe_identifier(self):
+        settings = Settings(
+            _env_file=None,
+            persistence_mode="database",
+            database_url="postgresql+psycopg://user:password@localhost/example",
+            database_schema="verbascene_app",
+        )
+
+        self.assertEqual(settings.database_schema, "verbascene_app")
+        with self.assertRaises(ValidationError):
+            Settings(
+                _env_file=None,
+                persistence_mode="database",
+                database_url="postgresql+psycopg://user:password@localhost/example",
+                database_schema="verbascene;drop schema public",
+            )
+
+    def test_postgres_engine_applies_configured_search_path(self):
+        with patch("app.db.session.create_engine") as create_engine:
+            create_database_engine(
+                "postgresql+psycopg://user:password@localhost/example",
+                database_schema="verbascene_app",
+            )
+
+        self.assertEqual(
+            create_engine.call_args.kwargs["connect_args"],
+            {"options": "-csearch_path=verbascene_app"},
         )
 
     def test_sqlite_schema_persists_json_and_enables_foreign_keys(self):

@@ -13,12 +13,13 @@ from app.models import (
     Scene,
     Shot,
 )
+from app.services.entity_service import list_characters
 
 MAX_CHARACTER_SOURCE_REFERENCES = 2
-MAX_VIDEO_CHARACTER_REFERENCES = 2
+MAX_VIDEO_CHARACTER_REFERENCES = 20
 MAX_VIDEO_SCENE_REFERENCES = 1
-MAX_VIDEO_IMAGE_REFERENCES = 4
-VIDEO_REFERENCE_POLICY = "optional_first_frame_plus_2_characters_1_scene_v2"
+MAX_VIDEO_IMAGE_REFERENCES = 22
+VIDEO_REFERENCE_POLICY = "optional_first_frame_plus_20_characters_1_scene_v3"
 
 
 @dataclass
@@ -538,8 +539,11 @@ def _reference_asset(asset: Asset, reference_role: str, priority: int) -> Resolv
 
 
 def _characters_for_shot(db: Session, project_id: str, shot: Shot) -> list[Character]:
+    current_visual_ids = {character.id for character in list_characters(db, project_id)}
     characters = []
     for character_id in _id_list(shot.character_ids):
+        if character_id not in current_visual_ids:
+            continue
         character = db.get(Character, character_id)
         if character and character.project_id == project_id:
             characters.append(character)

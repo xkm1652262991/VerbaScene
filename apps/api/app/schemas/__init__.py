@@ -45,7 +45,6 @@ from app.schemas.quality import QualityCheckRead, QualityCheckRunResponse
 from app.schemas.script import ScriptRead, ScriptUpdate
 from app.schemas.shot import (
     ShotCreate,
-    ShotGenerationResponse,
     ShotRead,
     ShotReorderItem,
     ShotReorderRequest,
@@ -108,7 +107,6 @@ __all__ = [
     "ScriptRead",
     "ScriptUpdate",
     "ShotCreate",
-    "ShotGenerationResponse",
     "ShotRead",
     "ShotReorderItem",
     "ShotReorderRequest",

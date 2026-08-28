@@ -4763,6 +4763,99 @@ h4 {
   color: #777168;
 }
 
+.director-check-panel {
+  display: grid;
+  gap: 10px;
+  padding: 14px;
+  border: 1px solid #d9d6e7;
+  border-radius: 12px;
+  background: #faf9ff;
+  color: #27243a;
+}
+
+.director-check-panel > header,
+.director-check-panel > header > div,
+.director-check-readiness {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.director-check-panel > header > div {
+  align-items: flex-start;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.director-check-panel > header span,
+.director-check-panel small {
+  color: #777187;
+  font-size: 11px;
+}
+
+.director-check-panel > header em,
+.director-check-readiness span {
+  padding: 4px 8px;
+  border-radius: 999px;
+  background: #eeeaf8;
+  color: #5b4a87;
+  font-size: 11px;
+  font-style: normal;
+}
+
+.director-check-readiness {
+  justify-content: flex-start;
+  flex-wrap: wrap;
+}
+
+.director-check-readiness span.ready {
+  background: #e8f5ed;
+  color: #277044;
+}
+
+.director-check-readiness span.warning,
+.director-check-panel.needs_attention > header em,
+.director-check-panel.review_unavailable > header em {
+  background: #fff1d8;
+  color: #8b5b12;
+}
+
+.director-check-panel p,
+.director-check-panel ul {
+  margin: 0;
+  color: #5e596b;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.director-check-panel details {
+  border-top: 1px solid #e5e2ee;
+  padding-top: 8px;
+}
+
+.director-check-panel summary {
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.director-check-panel ul {
+  display: grid;
+  gap: 7px;
+  padding: 8px 0 0 18px;
+}
+
+.director-check-panel li strong,
+.director-check-panel li span,
+.director-check-panel li small {
+  display: block;
+}
+
+.director-check-panel .director-check-hint {
+  color: #6a4b1a;
+}
+
 .task-context-links {
   justify-content: flex-start;
 }
@@ -7761,6 +7854,7 @@ h4 {
 }
 
 .director-project-actions > button,
+.director-project-actions > .director-export-download,
 .director-project-actions > details > summary {
   align-items: center;
   background: transparent;
@@ -7777,6 +7871,7 @@ h4 {
 }
 
 .director-project-actions > button:hover,
+.director-project-actions > .director-export-download:hover,
 .director-project-actions > details > summary:hover {
   background: #f2f2ee;
 }
@@ -7864,6 +7959,22 @@ h4 {
   border-color: var(--director-accent);
   color: #fff;
   padding-inline: 12px;
+}
+
+.director-project-actions > .director-export-download {
+  background: #edf8f1;
+  border-color: #c6e5d1;
+  color: #25623c;
+  text-decoration: none;
+}
+
+.director-project-actions > .director-export-download:hover {
+  background: #e3f4e9;
+  border-color: #9fcfb0;
+}
+
+.director-project-actions > .director-export-download small {
+  color: #4f8060;
 }
 
 .director-notices {
@@ -9658,6 +9769,7 @@ h4 {
   }
 
   .director-project-actions > button,
+  .director-project-actions > .director-export-download,
   .director-project-actions > details > summary {
     padding-inline: 6px;
   }

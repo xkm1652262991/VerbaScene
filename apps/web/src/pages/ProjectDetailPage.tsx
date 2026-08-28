@@ -57,6 +57,7 @@ import type {
   Dialogue,
   DialogueInput,
   EntityBundle,
+  ExportRecord,
   GenerationTask,
   Prop,
   Scene,
@@ -252,6 +253,9 @@ export function ProjectDetailPage({ initialShotId, initialWorkspace, projectId }
       if (tasks.some((task) => task.task_type === "script_generation" && task.status === "succeeded")) {
         setDialogueDrafts(next.dialogues);
       }
+      if (tasks.some((task) => task.task_type === "shot_breakdown" && task.status === "succeeded")) {
+        setSelectedShotId(next.shots[0]?.id ?? "");
+      }
     }
 
     async function syncTasks() {
@@ -297,6 +301,10 @@ export function ProjectDetailPage({ initialShotId, initialWorkspace, projectId }
             }
             nextDelay = response.items.some((task) => isGenerationTaskActive(task.status)) ? 2000 : 8000;
             await syncTerminalTaskResults(reachedTerminalTasks);
+            if (reachedTerminalTasks.length) {
+              lastFullSyncAt = 0;
+              nextDelay = 250;
+            }
           }
         }
       } catch {
@@ -315,6 +323,10 @@ export function ProjectDetailPage({ initialShotId, initialWorkspace, projectId }
   }, [projectId, taskRefreshVersion]);
 
   const scriptGenerationTask = projectTasks.find((task) => task.task_type === "script_generation") ?? null;
+  const shotDirectionTask = projectTasks.find((task) => task.task_type === "shot_breakdown") ?? null;
+  const currentShotDirectionTask = selectedShot?.shot_batch_id
+    ? projectTasks.find((task) => task.id === selectedShot.shot_batch_id && task.task_type === "shot_breakdown") ?? null
+    : shotDirectionTask?.status === "succeeded" ? shotDirectionTask : null;
   const selectedShotVideoTask = selectedShot
     ? projectTasks.find((task) => task.resource_key === `shot:${selectedShot.id}:video`) ?? null
     : null;
@@ -429,6 +441,28 @@ export function ProjectDetailPage({ initialShotId, initialWorkspace, projectId }
   const hasRequiredEntities = snapshot.entities.characters.length > 0 && snapshot.entities.scenes.length > 0;
   const selectedVideoProvider = providers.find((provider) => provider.type === "video" && provider.selected)
     ?? providers.find((provider) => provider.type === "video");
+  const latestExportDownload = findLatestExportDownload(
+    snapshot.exports,
+    snapshot.historical_assets ?? snapshot.assets,
+  );
+
+  async function downloadLatestExport() {
+    if (!latestExportDownload) return;
+    try {
+      setBusyLabel("下载最新成片");
+      setError("");
+      setMessage("");
+      await downloadMediaFile(
+        latestExportDownload.asset.uri,
+        `VerbaScene-${project.id.slice(0, 8)}-v${latestExportDownload.asset.version}.mp4`,
+      );
+      setMessage(`成片 v${latestExportDownload.asset.version} 已开始下载。`);
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "下载最新成片失败");
+    } finally {
+      setBusyLabel("");
+    }
+  }
 
   return (
     <div className="director-page">
@@ -501,6 +535,20 @@ export function ProjectDetailPage({ initialShotId, initialWorkspace, projectId }
             <small>{selectedVideoProvider?.native_audio ? "原生音频" : "原生音频待适配"}</small>
           </button>
           <button className="primary-button" onClick={() => setExportOpen(true)} type="button">导出本集</button>
+          {latestExportDownload ? (
+            <button
+              aria-label={`下载最新成片 v${latestExportDownload.asset.version} · ${subtitleModeLabel(latestExportDownload.record.subtitle_mode)}`}
+              className="director-export-download"
+              disabled={Boolean(busyLabel)}
+              onClick={() => { void downloadLatestExport(); }}
+              type="button"
+            >
+              下载最新成片
+              <small>
+                v{latestExportDownload.asset.version} · {subtitleModeLabel(latestExportDownload.record.subtitle_mode)}
+              </small>
+            </button>
+          ) : null}
         </nav>
       </header>
 
@@ -517,6 +565,7 @@ export function ProjectDetailPage({ initialShotId, initialWorkspace, projectId }
           batchTask={projectVideoBatchTask}
           candidates={snapshot.asset_candidates}
           dialogues={dialogueDrafts}
+          directorReportTask={currentShotDirectionTask}
           entities={snapshot.entities}
           imageProfileId={imageProfileId}
           imageProfiles={imageProfiles}
@@ -581,11 +630,16 @@ export function ProjectDetailPage({ initialShotId, initialWorkspace, projectId }
             () => generateSingleShotImageCandidate(selectedShot.id, imageProfileId || null),
             "首帧候选已生成。",
           )}
-          onGenerateShots={() => run(
-            snapshot.shots.length ? "重新生成片段方案" : "生成片段方案",
-            () => generateProjectShots(projectId),
-            "视频片段和内部镜头节拍已生成。",
-          )}
+          onGenerateShots={() => {
+            if (snapshot.shots.length && !window.confirm("重新生成会在任务成功后把当前片段批次移入历史，失败或取消不会影响当前方案。是否继续？")) return;
+            void submitTask(
+              snapshot.shots.length ? "提交分镜重新生成" : "提交分镜生成",
+              () => generateProjectShots(projectId, {
+                idempotencyKey: createTaskIdempotencyKey(`project:${projectId}:shots`),
+              }),
+              "分镜导演任务已受理，可继续编辑和切换工作区",
+            );
+          }}
           onGenerateAllVideos={() => {
             if (!window.confirm(`将为当前项目的 ${snapshot.shots.length} 个片段创建视频任务，是否继续？`)) return;
             void submitTask(
@@ -680,6 +734,7 @@ export function ProjectDetailPage({ initialShotId, initialWorkspace, projectId }
           promptPreview={promptPreview}
           selectedShot={selectedShot}
           selectedShotTask={selectedShotVideoTask}
+          shotDirectionTask={shotDirectionTask}
           selectedVideoProvider={selectedVideoProvider}
           shots={snapshot.shots}
           videoTasks={projectTasks.filter((task) => task.task_type === "shot_video_candidate_generation")}
@@ -784,18 +839,19 @@ export function ProjectDetailPage({ initialShotId, initialWorkspace, projectId }
                   imageProfiles={imageProfiles}
                   isBusy={Boolean(busyLabel)}
                   onAdopt={(candidate) => void run("采用资产图", () => promoteAssetCandidate(candidate.id, "从资产图生成页采用"), "资产图已采用。")}
+                  onCancelTask={(task) => { void cancelTask(task); }}
                   onContinue={() => {
                     if (snapshot.shots.length) {
                       openDirector();
                       return;
                     }
-                    void run(
-                      "生成片段方案",
-                      () => generateProjectShots(projectId),
-                      "视频片段方案已生成。",
-                    ).then((success) => {
-                      if (success) openDirector();
-                    });
+                    void submitTask(
+                      "提交分镜生成",
+                      () => generateProjectShots(projectId, {
+                        idempotencyKey: createTaskIdempotencyKey(`project:${projectId}:shots`),
+                      }),
+                      "分镜导演任务已受理，完成前仍可管理资产",
+                    );
                   }}
                   onGenerateAll={() => void run(
                     "生成角色和场景资产图",
@@ -818,10 +874,12 @@ export function ProjectDetailPage({ initialShotId, initialWorkspace, projectId }
                     "角色、场景和道具结构已提取；现在可以生成角色和场景图片。",
                   )}
                   onManage={openAssetLibrary}
+                  onRetryTask={(task) => { void retryTask(task); }}
                   onUploadImage={handleUploadImage}
                   onSelectProfile={setImageProfileId}
                   projectTitle={project.title}
                   shotCount={snapshot.shots.length}
+                  shotDirectionTask={shotDirectionTask}
                 />
               ) : (
                 <AssetLibraryWorkspace
@@ -1024,15 +1082,18 @@ function AssetGenerationWorkspace({
   imageProfiles,
   isBusy,
   onAdopt,
+  onCancelTask,
   onContinue,
   onGenerateAll,
   onGenerateEntities,
   onGenerateImage,
   onManage,
+  onRetryTask,
   onUploadImage,
   onSelectProfile,
   projectTitle,
   shotCount,
+  shotDirectionTask,
 }: {
   assets: Asset[];
   candidates: AssetCandidate[];
@@ -1041,15 +1102,18 @@ function AssetGenerationWorkspace({
   imageProfiles: ImageProviderProfile[];
   isBusy: boolean;
   onAdopt: (candidate: AssetCandidate) => void;
+  onCancelTask: (task: GenerationTask) => void;
   onContinue: () => void;
   onGenerateAll: () => void;
   onGenerateEntities: () => void;
   onGenerateImage: (entity: EntityItem, variantKey: string) => void;
   onManage: () => void;
+  onRetryTask: (task: GenerationTask) => void;
   onUploadImage: (entity: EntityItem, variantKey: string, file: File) => void;
   onSelectProfile: (id: string) => void;
   projectTitle: string;
   shotCount: number;
+  shotDirectionTask: GenerationTask | null;
 }) {
   const visualEntities = entityItems(entities).filter((item) => item.kind !== "prop");
   const adoptedByEntity = new Map(
@@ -1091,6 +1155,16 @@ function AssetGenerationWorkspace({
           <span>基础图已采用{pendingCount ? ` · ${pendingCount} 个候选待处理` : ""}</span>
         </div>
       </header>
+
+      {shotDirectionTask && shotDirectionTask.status !== "succeeded" ? (
+        <GenerationTaskBanner
+          actionBusy={isBusy}
+          onCancel={onCancelTask}
+          onRetry={onRetryTask}
+          task={shotDirectionTask}
+          title="分镜导演任务"
+        />
+      ) : null}
 
       {!hasEntities ? (
         <section className="asset-generation-empty">
@@ -1191,8 +1265,15 @@ function AssetGenerationWorkspace({
         <button className="secondary-button" onClick={onManage} type="button">打开资产库精细管理</button>
         <div>
           <span>{adoptedCount < visualEntities.length ? "仍可继续，但缺少采用图的角色或场景不会作为视频参考。" : "角色和场景基础图已准备完成。"}</span>
-          <button className="primary-button" disabled={!hasEntities} onClick={onContinue} type="button">
-            {shotCount ? "进入视频制作 →" : "生成片段方案并进入视频制作 →"}
+          <button
+            className="primary-button"
+            disabled={!hasEntities || Boolean(shotDirectionTask && isGenerationTaskActive(shotDirectionTask))}
+            onClick={onContinue}
+            type="button"
+          >
+            {shotDirectionTask && isGenerationTaskActive(shotDirectionTask)
+              ? "分镜导演任务进行中"
+              : shotCount ? "进入视频制作 →" : "提交分镜导演任务 →"}
           </button>
         </div>
       </footer>
@@ -1515,6 +1596,42 @@ function variantSceneText(item: EntityItem, variantKey: string) {
 
 function selectedVideoAssets(assets: Asset[]) {
   return assets.filter((asset) => asset.asset_type === "video" && asset.entity_type === "shot" && asset.is_selected);
+}
+
+function findLatestExportDownload(exports: ExportRecord[], assets: Asset[]) {
+  const assetsById = new Map(assets.map((asset) => [asset.id, asset]));
+  let latest: { asset: Asset; record: ExportRecord } | null = null;
+  for (const record of exports) {
+    if (record.status !== "completed" || !record.asset_id) continue;
+    const asset = assetsById.get(record.asset_id);
+    if (!asset || asset.asset_type !== "final_video" || !asset.uri) continue;
+    if (!latest || Date.parse(record.created_at) > Date.parse(latest.record.created_at)) {
+      latest = { asset, record };
+    }
+  }
+  return latest;
+}
+
+function subtitleModeLabel(mode: ExportRecord["subtitle_mode"]) {
+  if (mode === "bilingual") return "中英双语";
+  if (mode === "en") return "英文字幕";
+  return "无字幕";
+}
+
+async function downloadMediaFile(uri: string, filename: string) {
+  const response = await fetch(uri);
+  if (!response.ok) {
+    throw new Error(`下载成片失败（HTTP ${response.status}）`);
+  }
+  const objectUrl = URL.createObjectURL(await response.blob());
+  const anchor = document.createElement("a");
+  anchor.href = objectUrl;
+  anchor.download = filename;
+  anchor.style.display = "none";
+  document.body.appendChild(anchor);
+  anchor.click();
+  anchor.remove();
+  window.setTimeout(() => URL.revokeObjectURL(objectUrl), 1000);
 }
 
 function canPreviewCandidate(candidate: AssetCandidate) {

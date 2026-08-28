@@ -30,6 +30,16 @@
 | [24-script-prompt-quality-pipeline.md](24-script-prompt-quality-pipeline.md) | 剧本开发、审稿、定点修订与语义编译 |
 | [25-demo-evidence.md](25-demo-evidence.md) | 可对外陈述的证据、样片清单和验收缺口 |
 | [26-backend-task-runtime.md](26-backend-task-runtime.md) | 统一任务状态、租约、重试、取消与视频批次合同 |
+| [27-minimax-h3-video-integration.md](27-minimax-h3-video-integration.md) | MiniMax H3 网关、自动模型路由与异步任务合同 |
+| [28-反思式分镜导演Agent.md](28-反思式分镜导演Agent.md) | 分镜草案、资产观察、Reflection、受限 Patch 与任务恢复合同 |
+
+## 求职与项目表达
+
+| 文档 | 内容 |
+| --- | --- |
+| [AI-Agent开发岗项目简历.md](AI-Agent开发岗项目简历.md) | 面向 AI / Agent 开发岗的仓库证据分析与单版项目经历 |
+| [应届生项目简历描述.md](应届生项目简历描述.md) | 可直接投递的项目经历、岗位微调、STAR 映射与事实边界 |
+| [应届生项目面试问答.md](应届生项目面试问答.md) | 简历描述、STAR 表达、项目介绍与面试官逐层追问 |
 
 前后端机器可读合同位于 [api/openapi.json](api/openapi.json)。路由或 Schema 变化后，应重新导出并执行合同检查。
 

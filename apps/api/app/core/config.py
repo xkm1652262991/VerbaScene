@@ -1,5 +1,6 @@
 from functools import lru_cache
 from pathlib import Path
+import re
 from typing import Literal
 
 from pydantic import field_validator, model_validator
@@ -20,6 +21,7 @@ class Settings(BaseSettings):
     ]
     persistence_mode: Literal["local", "database"] = "local"
     database_url: str | None = None
+    database_schema: str | None = None
     local_data_dir: str = "../../storage/local"
     local_database_filename: str = "content.sqlite3"
     redis_url: str = "redis://localhost:6379/0"
@@ -110,6 +112,16 @@ class Settings(BaseSettings):
     ltx23_cfg: float = 1.0
     ltx23_fps: float = 16.0
     ltx23_strength: float = 0.78
+    minimax_h3_gateway_base_url: str | None = None
+    minimax_h3_gateway_api_key: str | None = None
+    minimax_h3_gateway_model: str = "auto"
+    minimax_h3_gateway_timeout_sec: int = 60
+    minimax_h3_gateway_poll_interval_sec: int = 5
+    minimax_h3_gateway_job_timeout_sec: int = 3600
+    minimax_h3_gateway_landscape_size: str = "1024x576"
+    minimax_h3_gateway_portrait_size: str = "576x1024"
+    minimax_h3_gateway_steps: int = 19
+    minimax_h3_gateway_seed: int | None = None
     wan_i2v_api_base_url: str = "http://127.0.0.1:18083"
     wan_i2v_api_protocol: str = "official"
     wan_i2v_api_key: str | None = None
@@ -143,6 +155,19 @@ class Settings(BaseSettings):
             return [origin.strip() for origin in value.split(",") if origin.strip()]
         return value
 
+    @field_validator("database_schema", mode="before")
+    @classmethod
+    def validate_database_schema(cls, value: str | None) -> str | None:
+        normalized = str(value or "").strip()
+        if not normalized:
+            return None
+        if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", normalized):
+            raise ValueError(
+                "DATABASE_SCHEMA must start with a letter or underscore and contain "
+                "only letters, numbers, and underscores"
+            )
+        return normalized
+
     @model_validator(mode="after")
     def migrate_legacy_image_reference_capability(self):
         if (
@@ -172,6 +197,7 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(
         env_file=".env",
         env_file_encoding="utf-8",
+        env_ignore_empty=True,
         extra="ignore",
     )
 

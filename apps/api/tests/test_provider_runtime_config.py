@@ -23,7 +23,7 @@ from app.services.provider_config_service import (
     reset_runtime_provider_config,
     upsert_runtime_provider_config,
 )
-from app.services.provider_secret_store import provider_secret_file_path
+from app.services.provider_secret_store import get_provider_secret, provider_secret_file_path
 
 
 class ProviderRuntimeConfigTests(unittest.TestCase):
@@ -333,6 +333,74 @@ class ProviderRuntimeConfigTests(unittest.TestCase):
         self.assertEqual(
             provider.supported_resolutions,
             ["480p", "720p", "1080p"],
+        )
+
+    def test_minimax_h3_runtime_config_supports_explicit_no_key_mode(self):
+        saved = upsert_runtime_provider_config(
+            self.db,
+            "video",
+            ProviderConfigUpsert(
+                provider_name="minimax_h3_gateway",
+                model_name="auto",
+                base_url="http://192.0.2.24:18289/v1",
+                api_key_mode="none",
+                default_params={
+                    "landscape_size": "1024x576",
+                    "portrait_size": "576x1024",
+                    "steps": 19,
+                },
+            ),
+        )
+
+        provider = provider_registry.get(ProviderType.VIDEO, "minimax_h3_gateway")
+        self.assertEqual(saved["configuration_status"], "ready")
+        self.assertEqual(saved["api_key_mode"], "none")
+        self.assertFalse(saved["api_key_configured"])
+        self.assertEqual(settings.video_provider, "minimax_h3_gateway")
+        self.assertEqual(
+            settings.minimax_h3_gateway_base_url,
+            "http://192.0.2.24:18289/v1",
+        )
+        self.assertIsNone(settings.minimax_h3_gateway_api_key)
+        self.assertEqual(provider.model, "auto")
+        self.assertTrue(provider.reference_images)
+        self.assertTrue(provider.multi_reference)
+        self.assertEqual(provider.max_duration_sec, 15)
+        self.assertIn("automatic_model_routing", provider.capabilities)
+
+    def test_switching_to_h3_preserves_other_provider_direct_secret(self):
+        upsert_runtime_provider_config(
+            self.db,
+            "video",
+            ProviderConfigUpsert(
+                provider_name="seedance2_api",
+                model_name="doubao-seedance-2-0-260128",
+                base_url="https://ark.test/api/v3",
+                api_key_mode="direct",
+                api_key="seedance-secret-to-preserve",
+                default_params={"resolution": "480p"},
+            ),
+        )
+
+        upsert_runtime_provider_config(
+            self.db,
+            "video",
+            ProviderConfigUpsert(
+                provider_name="minimax_h3_gateway",
+                model_name="auto",
+                base_url="http://192.0.2.24:18289/v1",
+                api_key_mode="none",
+                default_params={
+                    "landscape_size": "1024x576",
+                    "portrait_size": "576x1024",
+                    "steps": 19,
+                },
+            ),
+        )
+
+        self.assertEqual(
+            get_provider_secret("video", "seedance2_api"),
+            "seedance-secret-to-preserve",
         )
 
     def test_wan_official_runtime_rejects_non_service_parameters(self):

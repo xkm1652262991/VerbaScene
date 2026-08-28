@@ -590,9 +590,10 @@ export async function getProjectShotPromptPreviews(projectId: string) {
   return response.items;
 }
 
-export function generateProjectShots(projectId: string) {
-  return request<{ shots: Shot[]; task_id: string }>(`/api/projects/${projectId}/shots/generate`, {
+export function generateProjectShots(projectId: string, options?: GenerationTaskRequestOptions) {
+  return request<GenerationTask>(`/api/projects/${projectId}/shots/generate`, {
     method: "POST",
+    headers: idempotencyHeaders(options),
   });
 }
 

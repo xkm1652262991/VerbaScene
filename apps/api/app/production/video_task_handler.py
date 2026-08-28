@@ -427,6 +427,7 @@ def _provider_deadline_expired(raw_response: dict, provider_name: str) -> bool:
     timeout_by_provider = {
         "seedance2_api": settings.seedance2_api_job_timeout_sec,
         "ltx23_api": settings.ltx23_api_job_timeout_sec,
+        "minimax_h3_gateway": settings.minimax_h3_gateway_job_timeout_sec,
         "wan2_i2v_api": settings.wan_i2v_api_job_timeout_sec,
         "wan2_t2v_api": settings.wan_t2v_api_job_timeout_sec,
     }

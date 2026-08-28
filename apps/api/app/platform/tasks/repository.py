@@ -335,8 +335,8 @@ class TaskRepository:
                 task_id=source.id,
             )
         raw_response = (
-            _script_manual_retry_response(source)
-            if source.task_type == "script_generation"
+            _checkpoint_manual_retry_response(source)
+            if source.task_type in {"script_generation", "shot_breakdown"}
             else {}
         )
         result = self.create(
@@ -446,7 +446,7 @@ class TaskRepository:
         return True
 
 
-def _script_manual_retry_response(source: GenerationTask) -> dict[str, Any]:
+def _checkpoint_manual_retry_response(source: GenerationTask) -> dict[str, Any]:
     raw_response = source.raw_response if isinstance(source.raw_response, dict) else {}
     checkpoint = deepcopy(raw_response.get("checkpoint") or {})
     failure_phase = str(raw_response.get("failure_phase") or "")

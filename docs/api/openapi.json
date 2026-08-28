@@ -771,23 +771,6 @@
         "title": "ApiResponse[ScriptRead]",
         "type": "object"
       },
-      "ApiResponse_ShotGenerationResponse_": {
-        "properties": {
-          "data": {
-            "$ref": "#/components/schemas/ShotGenerationResponse"
-          },
-          "success": {
-            "default": true,
-            "title": "Success",
-            "type": "boolean"
-          }
-        },
-        "required": [
-          "data"
-        ],
-        "title": "ApiResponse[ShotGenerationResponse]",
-        "type": "object"
-      },
       "ApiResponse_ShotRead_": {
         "properties": {
           "data": {
@@ -6469,27 +6452,6 @@
           "updated_at"
         ],
         "title": "ShotFrameImageRead",
-        "type": "object"
-      },
-      "ShotGenerationResponse": {
-        "properties": {
-          "shots": {
-            "items": {
-              "$ref": "#/components/schemas/ShotRead"
-            },
-            "title": "Shots",
-            "type": "array"
-          },
-          "task_id": {
-            "title": "Task Id",
-            "type": "string"
-          }
-        },
-        "required": [
-          "shots",
-          "task_id"
-        ],
-        "title": "ShotGenerationResponse",
         "type": "object"
       },
       "ShotPromptPreviewRead": {
@@ -12399,14 +12361,30 @@
               "title": "Project Id",
               "type": "string"
             }
+          },
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Idempotency-Key"
+            }
           }
         ],
         "responses": {
-          "200": {
+          "202": {
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ApiResponse_ShotGenerationResponse_"
+                  "$ref": "#/components/schemas/ApiResponse_GenerationTaskRead_"
                 }
               }
             },

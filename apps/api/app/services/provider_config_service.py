@@ -37,7 +37,13 @@ PROVIDER_CATALOG: dict[str, tuple[str, ...]] = {
         "qwen_image_musubi",
         "comfyui_flux",
     ),
-    "video": ("mock", "seedance2_api", "ltx23_api", "wan2_i2v_api"),
+    "video": (
+        "mock",
+        "seedance2_api",
+        "ltx23_api",
+        "minimax_h3_gateway",
+        "wan2_i2v_api",
+    ),
 }
 
 SELECTION_SETTINGS = {
@@ -60,6 +66,10 @@ MODEL_SETTINGS: dict[tuple[str, str], tuple[str, ...]] = {
     ("video", "mock"): ("video_model",),
     ("video", "seedance2_api"): ("video_model", "seedance2_model"),
     ("video", "ltx23_api"): ("video_model",),
+    ("video", "minimax_h3_gateway"): (
+        "video_model",
+        "minimax_h3_gateway_model",
+    ),
     ("video", "wan2_i2v_api"): ("video_model",),
 }
 
@@ -77,6 +87,7 @@ BASE_URL_SETTINGS: dict[tuple[str, str], str | None] = {
     ("video", "mock"): None,
     ("video", "seedance2_api"): "seedance2_api_base_url",
     ("video", "ltx23_api"): "ltx23_api_base_url",
+    ("video", "minimax_h3_gateway"): "minimax_h3_gateway_base_url",
     ("video", "wan2_i2v_api"): "wan_i2v_api_base_url",
 }
 
@@ -94,6 +105,7 @@ API_KEY_SETTINGS: dict[tuple[str, str], str | None] = {
     ("video", "mock"): None,
     ("video", "seedance2_api"): "seedance2_api_key",
     ("video", "ltx23_api"): None,
+    ("video", "minimax_h3_gateway"): "minimax_h3_gateway_api_key",
     ("video", "wan2_i2v_api"): "wan_i2v_api_key",
 }
 
@@ -115,6 +127,7 @@ API_KEY_REF_CANDIDATES: dict[tuple[str, str], tuple[str, ...]] = {
         "VIDEO_API_KEY",
     ),
     ("video", "ltx23_api"): (),
+    ("video", "minimax_h3_gateway"): ("MINIMAX_H3_GATEWAY_API_KEY",),
     ("video", "wan2_i2v_api"): ("WAN_I2V_API_KEY", "VIDEO_API_KEY"),
 }
 
@@ -202,6 +215,12 @@ PROVIDER_PARAM_SPECS: dict[tuple[str, str], dict[str, ParamSpec]] = {
         "fps": ParamSpec("ltx23_fps", float),
         "strength": ParamSpec("ltx23_strength", float),
     },
+    ("video", "minimax_h3_gateway"): {
+        "landscape_size": ParamSpec("minimax_h3_gateway_landscape_size", str),
+        "portrait_size": ParamSpec("minimax_h3_gateway_portrait_size", str),
+        "steps": ParamSpec("minimax_h3_gateway_steps", int),
+        "seed": ParamSpec("minimax_h3_gateway_seed", int),
+    },
 }
 
 _MUTABLE_SETTING_NAMES = {
@@ -279,9 +298,11 @@ def upsert_runtime_provider_config(
             set_provider_secret(provider_type, payload.provider_name, previous_secret)
         raise
     db.refresh(config)
-    for existing in existing_configs:
-        if existing.api_key_ref == DIRECT_API_KEY_REF and existing.provider_name != payload.provider_name:
-            delete_provider_secret(provider_type, existing.provider_name)
+    # Credentials are scoped by slot and provider name. Switching the active
+    # adapter must not destroy another provider's write-only credential; users
+    # expect to be able to switch back without re-entering a key. A provider's
+    # own secret is still removed when that provider is explicitly saved with
+    # api_key_mode="none" or when its active slot is reset.
     reload_runtime_provider_configs(db)
     return _serialize_runtime_config(provider_type, config)
 
@@ -412,6 +433,61 @@ def _validate_provider_default_params(slot: str, provider_name: str, params: dic
             raise HTTPException(
                 status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
                 detail="LTX-2.3 CFG 不能小于 0，strength 必须在 0 到 1 之间。",
+            )
+        return
+    if provider_name == "minimax_h3_gateway":
+        try:
+            landscape_size = str(
+                params.get(
+                    "landscape_size",
+                    settings.minimax_h3_gateway_landscape_size,
+                )
+            )
+            portrait_size = str(
+                params.get(
+                    "portrait_size",
+                    settings.minimax_h3_gateway_portrait_size,
+                )
+            )
+            dimensions = [
+                _parse_minimax_h3_size(landscape_size),
+                _parse_minimax_h3_size(portrait_size),
+            ]
+            steps = int(params.get("steps", settings.minimax_h3_gateway_steps))
+            seed = params.get("seed", settings.minimax_h3_gateway_seed)
+            if seed is not None:
+                seed = int(seed)
+        except (TypeError, ValueError) as exc:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                detail="MiniMax H3 视频参数格式无效。",
+            ) from exc
+        if any(
+            width < 32
+            or height < 32
+            or width > 2048
+            or height > 2048
+            or width % 32
+            or height % 32
+            or width * height > 2_100_000
+            for width, height in dimensions
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                detail=(
+                    "MiniMax H3 宽高必须是 32-2048 范围内的 32 倍数，"
+                    "且总像素不能超过 2100000。"
+                ),
+            )
+        if not 1 <= steps <= 100:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                detail="MiniMax H3 steps 必须在 1 到 100 之间。",
+            )
+        if seed is not None and not 0 <= seed <= 2**64 - 1:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                detail="MiniMax H3 seed 必须是无符号 64 位整数。",
             )
         return
     if provider_name != "wan2_i2v_api":
@@ -545,7 +621,13 @@ def baseline_provider_snapshot(slot: str) -> dict[str, Any]:
     model_setting_names = MODEL_SETTINGS[(slot, provider_name)]
     preferred_model_setting = (
         model_setting_names[-1]
-        if provider_name in {"gemini", "dashscope_image", "qwen_image_musubi", "comfyui_flux"}
+        if provider_name in {
+            "gemini",
+            "dashscope_image",
+            "qwen_image_musubi",
+            "comfyui_flux",
+            "minimax_h3_gateway",
+        }
         else model_setting_names[0]
     )
     model_name = str(_BASELINE_SETTINGS.get(preferred_model_setting) or "")
@@ -658,6 +740,12 @@ def _normalize_default_params(
 
 def _param_specs(slot: str, provider_name: str) -> dict[str, ParamSpec]:
     return PROVIDER_PARAM_SPECS.get((slot, provider_name), PARAM_SPECS[slot])
+
+
+def _parse_minimax_h3_size(value: str) -> tuple[int, int]:
+    normalized = value.strip().lower().replace("*", "x")
+    width_text, height_text = normalized.split("x", 1)
+    return int(width_text), int(height_text)
 
 
 def _validate_slot_and_provider(slot: str, provider_name: str) -> None:

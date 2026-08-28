@@ -79,7 +79,7 @@ Prompt 必须使用与 `content` 完全一致的“图片N”指代，不能把�
 当前视频链路执行受控素材策略：
 
 - 默认不发送片段首帧；只有 `shot_card.video_reference_asset_id` 明确绑定可用图片时，才把该图片作为首帧和构图起点。
-- 未使用首帧时，最多发送 2 张角色形象图和 1 张场景图；使用首帧时总图片数最多 4 张。
+- 应用层未使用首帧时，最多解析 20 张角色形象图和 1 张场景图；使用首帧时应用层总上限为 22 张。Provider Adapter 仍必须按各自合同执行更严格的上限（MiniMax H3 当前最多 9 张）。
 - 同一角色只发送一个精确采用版本，不额外发送多角度源图。
 - 默认资产图只生成角色和场景。道具不生成独立参考图，也不上传给视频模型；道具通过剧情、动作和空间关系文字描述。
 - 显式绑定仍保存角色、场景和道具的精确版本，但视频 Provider 只消费角色与
@@ -103,3 +103,10 @@ Adapter 的 `submit()` 创建方舟任务后立即返回；Worker 分次调用 `
 
 Seedance 2.0 方舟 Adapter 已纳入视频槽位。Seedream 仍未适配。合同测试使用
 假密钥和 Mock HTTP 响应，不自动发起任何真实付费生成。
+
+## MiniMax H3 网关 Adapter
+
+Provider 名称为 `minimax_h3_gateway`，使用统一的异步视频合同。配置模型为
+`auto` 时，明确首帧路由到 `minimax-h3-fl2va`，角色或场景参考图路由到
+`minimax-h3-r2v`，无参考素材时使用 FL2VA 文生视频。完整接口、尺寸映射、
+免 Key 边界和验收要求见 [27-minimax-h3-video-integration.md](27-minimax-h3-video-integration.md)。

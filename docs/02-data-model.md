@@ -44,9 +44,13 @@ AI 模式要求 `outline`，导入模式要求 `source_text`。旧项目迁移�
 
 对白同时是视频 Prompt 和导出字幕的数据源，不保存独立音频引用。
 
+`speaker_name` 表示声音归属，不等同于可视角色。旁白、画外音、解说、系统语音以及未在任何 `visible_action` 中出镜的虚拟引导声保留对白内容，但 `character_id` 必须为空；它们不得进入 Character、角色参考图、镜头 `character_ids` 或媒体生成任务。真实角色即使在某一场画外说话，只要在其他场明确出镜，仍保留 Character 身份。
+
 ## Character / Scene / Prop
 
 `asset_spec.state_variants[]` 每项包含稳定 `key`、名称、描述和出现的场次。实体本身只保存稳定身份；受伤、持物、天气、损坏等临时状态属于变体。
+
+Character 只表示至少在一个生产场景中具有可见身体、动作或表情的实体。纯声音职责不是 Character，也不建立 `reference_plan`。
 
 ## Shot
 

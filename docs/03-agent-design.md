@@ -151,27 +151,30 @@
 - 场景固定 Prompt。
 - 场景参考图 Prompt。
 
-### 2.6 Shot Breakdown Agent
+### 2.6 反思式分镜导演 Agent
 
 职责：
 
 - 将当前剧本拆解为可独立生成的视频片段。
+- 先观察冻结的资产设定、采用版本和媒体元数据，再对完整草案做一次独立 Reflection。
 - 为每个片段规划多个内部镜头节拍，绑定角色、场景、道具和对白 ID。
 - 默认片段时长 8–15 秒、优选约 12 秒，每片段包含 2–4 个内部镜头；不得因为普通景别变化、对白轮次或单个反应动作创建新的片段。
-- 只为整个视频片段给出目标时长；内部镜头按剧情顺序描述，不给每个镜头硬分配秒数，由视频模型根据整段时长和叙事节奏自行调度。
+- 不预测 Shot 或内部镜头秒数；内部镜头只按剧情顺序描述，由视频 Provider 根据完整动作和对白选择实际时长。
 - 只有场景/时空变化、叙事连续性断裂、主要资产集合明显变化，或单片段超过规划上限时才拆片段。
 - 项目分段是稳定创作结构，不随当前临时选中的 Provider 自动缩短；Provider 时长不足时由生成前能力校验明确阻止。
 
 输入：
 
-- 当前剧本。
-- 当前角色、场景、道具。
+- 创建任务时冻结的剧本、Dialogue、角色、场景、道具和状态变体。
+- 当前采用资产的版本、URI 与媒体元数据。
+- 项目视觉风格、画幅、分辨率和分段合同。
 
 输出：
 
 - 片段表。
 - 含有序镜头语言、动作、对白 ID 和音效提示的 Shot Card。
-- 包含目标片段时长范围与内部镜头数量的 `segment_plan`。
+- `AssetReadinessReport`、`ReflectionReport`、可选 `ShotPatch` 与最终 `ContractReport`。
+- 创意性的分镜图主体 Prompt；项目风格、媒体编号和最终视频 Prompt 仍由确定性服务编译。
 
 ### 2.7 Prompt Engineering Agent
 
@@ -322,7 +325,7 @@
 
 - Project Planner、Script Multi-Agent Pipeline：按 Story Architect、Script Writer、Comprehensive Reviewer 和可选 Targeted Reviser 调用 LLM；Contract Validator 与 Patch 合并由后端确定性执行，可读剧本和顶层对白由 `scenes` 派生，完整阶段轨迹保存在生成任务中。
 - Entity Extraction：一次 LLM 调用生成角色、场景、道具、结构化资产卡和参考图最终 Prompt。
-- Shot Breakdown：一次 LLM 调用生成当前片段批次、内部镜头节拍和单张 `storyboard_frame` 分镜预览 Prompt；该图片只有在用户明确启用时才作为视频首帧。
+- Shot Breakdown 已升级为有边界的反思式分镜导演 Agent：它读取冻结的剧本、实体和采用资产元数据，先生成完整片段草案，再由独立 `storyboard_reviewer` 按 `coverage / continuity / dialogue / cinematography / asset_feasibility / production` 六类问题反思；只有 `must_fix` 才触发至多一次受限 Patch。确定性服务负责校验、重排编号、Dialogue 保护、Prompt 编译和原子切换批次。完整合同见 `28-反思式分镜导演Agent.md`。
 - Image Generation：原样读取已保存图片 Prompt 和结构化可见实体 ID；不调用 Refiner、图片编译器或运行时重写。
 - Shot Frame：直接从 `shot_card.image_prompts` 生成首帧、关键帧和尾帧，不再创建新的 `ShotFramePrompt` 中间记录。
 - Video Generation：默认使用文本 Prompt 与角色/场景参考图；明确启用首帧时才额外发送分镜图，当前在请求内轮询到完成。
@@ -332,7 +335,7 @@
 - Asset Resolver：视频默认只解析角色和场景图，明确启用时再解析片段首帧；道具只保留结构化剧情信息，并把实际引用写入任务上下文。
 - AVD Prompt/Rule/Asset Strategy/Patch Pipeline：已接入 Prompt 包、规则检查、资产策略和变更影响预演。
 
-运行时可以通过 `AgentConfig` / `PromptVersion` 为 `script_rewriter`、`script_reviewer`、`extractor` 和 `storyboard_breaker` 选择文本 Provider、模型和系统 Prompt。`script_reviewer` 与写作配置分离，允许使用不同模型；其他媒体 Provider 仍由环境变量或 Provider Profile 选择。
+运行时可以通过 `AgentConfig` / `PromptVersion` 为 `script_rewriter`、`script_reviewer`、`extractor`、`storyboard_breaker` 和 `storyboard_reviewer` 选择文本 Provider、模型和系统 Prompt。两个 reviewer 都与创作配置分离；未单独配置 `storyboard_reviewer` 时回退到 `storyboard_breaker` 的 Provider 和模型。
 
 当前明确缺口：
 

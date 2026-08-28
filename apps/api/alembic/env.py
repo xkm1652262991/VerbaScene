@@ -1,10 +1,11 @@
 from logging.config import fileConfig
 
 from alembic import context
-from sqlalchemy import engine_from_config, pool
+from sqlalchemy.schema import CreateSchema
 
 from app.core.config import settings
 from app.db.base import Base
+from app.db.session import create_database_engine
 import app.models  # noqa: F401
 
 config = context.config
@@ -13,6 +14,11 @@ if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
 target_metadata = Base.metadata
+
+
+def include_object(object_: object, name: str, type_: str, reflected: bool, compare_to: object) -> bool:
+    del object_, reflected, compare_to
+    return not (type_ == "table" and name == "alembic_version")
 
 
 def get_url() -> str:
@@ -37,23 +43,32 @@ def run_migrations_offline() -> None:
 
 
 def run_migrations_online() -> None:
-    configuration = config.get_section(config.config_ini_section, {})
-    configuration["sqlalchemy.url"] = get_url()
+    if settings.database_schema:
+        schema_engine = create_database_engine(get_url())
+        try:
+            with schema_engine.begin() as connection:
+                connection.execute(CreateSchema(settings.database_schema, if_not_exists=True))
+        finally:
+            schema_engine.dispose()
 
-    connectable = engine_from_config(
-        configuration,
-        prefix="sqlalchemy.",
-        poolclass=pool.NullPool,
+    connectable = create_database_engine(
+        get_url(),
+        database_schema=settings.database_schema,
     )
 
-    with connectable.connect() as connection:
-        context.configure(
-            connection=connection,
-            target_metadata=target_metadata,
-        )
+    try:
+        with connectable.connect() as connection:
+            context.configure(
+                connection=connection,
+                target_metadata=target_metadata,
+                version_table_schema=settings.database_schema,
+                include_object=include_object,
+            )
 
-        with context.begin_transaction():
-            context.run_migrations()
+            with context.begin_transaction():
+                context.run_migrations()
+    finally:
+        connectable.dispose()
 
 
 if context.is_offline_mode():

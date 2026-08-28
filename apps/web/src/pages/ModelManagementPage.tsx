@@ -85,6 +85,7 @@ const DEFAULT_KEY_REFS: Record<string, string> = {
   custom_image_http: "IMAGE_API_KEY",
   wan2_i2v_api: "WAN_I2V_API_KEY",
   seedance2_api: "ARK_API_KEY",
+  minimax_h3_gateway: "MINIMAX_H3_GATEWAY_API_KEY",
 };
 
 const PROVIDERS_WITHOUT_BASE_URL = new Set(["mock"]);
@@ -93,6 +94,7 @@ const PROVIDER_KEY_POLICY: Record<string, "required" | "optional" | "none"> = {
   comfyui_flux: "none",
   qwen_image_musubi: "none",
   ltx23_api: "none",
+  minimax_h3_gateway: "optional",
   custom_image_http: "optional",
   openai_image: "optional",
   custom: "optional",
@@ -281,6 +283,8 @@ export function ModelManagementPage() {
             ? { resolution: "480p", generate_audio: true, watermark: false }
           : providerName === "ltx23_api"
             ? { size: "1024x576", frames: "81", steps: "8", guidance: "1", fps: "16", strength: "0.78" }
+          : providerName === "minimax_h3_gateway"
+            ? { landscape_size: "1024x576", portrait_size: "576x1024", steps: "19" }
           : { supports_references: false };
       return {
         ...current,
@@ -295,6 +299,8 @@ export function ModelManagementPage() {
             : "",
         api_key_mode: providerName === selectedRuntimeConfig?.provider_name
           ? current.api_key_mode
+          : providerName === "minimax_h3_gateway"
+            ? "none"
           : (PROVIDER_KEY_POLICY[providerName] ?? "required") === "none"
             ? "none"
             : "environment",
@@ -395,7 +401,7 @@ export function ModelManagementPage() {
                   providers={slotProviders}
                   slot={selectedTarget}
                 />
-                {selectedTarget === "video" && ["seedance2_api", "ltx23_api", "wan2_i2v_api"].includes(selectedRuntimeConfig.provider_name) ? (
+                {selectedTarget === "video" && ["seedance2_api", "ltx23_api", "minimax_h3_gateway", "wan2_i2v_api"].includes(selectedRuntimeConfig.provider_name) ? (
                   <VideoProviderTestPanel
                     config={selectedRuntimeConfig}
                     key={selectedRuntimeConfig.updated_at ?? selectedRuntimeConfig.id ?? selectedRuntimeConfig.provider_name}
@@ -499,12 +505,14 @@ function RuntimeConfigPanel({ slot, config, draft, providers, busy, onDraftChang
             <label>
               模型名称
               <input required value={draft.model_name} onChange={(event) => onDraftChange((current) => ({ ...current, model_name: event.target.value }))} />
-              <small>必须与上游服务实际暴露的 model ID 一致。</small>
+              <small>{draft.provider_name === "minimax_h3_gateway"
+                ? "推荐填写 auto：首帧走 FL2VA，角色/场景参考走 R2V；也可固定填写一个实际模型 ID。"
+                : "必须与上游服务实际暴露的 model ID 一致。"}</small>
             </label>
             {needsBaseUrl ? (
               <label className="model-form-span">
                 服务地址
-                <input placeholder={draft.provider_name === "comfyui_flux" ? "多个地址用逗号分隔" : "https://api.example.com/v1"} value={draft.base_url} onChange={(event) => onDraftChange((current) => ({ ...current, base_url: event.target.value }))} />
+                <input placeholder={draft.provider_name === "comfyui_flux" ? "多个地址用逗号分隔" : draft.provider_name === "minimax_h3_gateway" ? "http://gateway-host:18289/v1" : "https://api.example.com/v1"} value={draft.base_url} onChange={(event) => onDraftChange((current) => ({ ...current, base_url: event.target.value }))} />
                 <small>留空时沿用后端环境配置；保存的地址会立即用于新请求。</small>
               </label>
             ) : null}
@@ -691,6 +699,22 @@ function RuntimeParameterFields({
             </label>
             <div className="model-inline-note model-form-span">
               默认使用 Seedance 智能时长，由模型在 4–15 秒内选择实际长度；固定秒数仅作为生成时的人工覆盖。支持图片、视频、音频混合参考。
+            </div>
+          </div>
+        </fieldset>
+      );
+    }
+    if (providerName === "minimax_h3_gateway") {
+      return (
+        <fieldset disabled={false}>
+          <legend>MiniMax H3 默认值</legend>
+          <div className="model-form-grid four-columns">
+            <ParameterInput label="横版生成尺寸" name="landscape_size" onChange={setParam} value={value("landscape_size")} />
+            <ParameterInput label="竖版生成尺寸" name="portrait_size" onChange={setParam} value={value("portrait_size")} />
+            <ParameterInput label="采样步数" min="1" name="steps" onChange={setParam} type="number" value={value("steps")} />
+            <ParameterInput label="固定 Seed（留空随机）" name="seed" onChange={setParam} type="number" value={value("seed")} />
+            <div className="model-inline-note model-form-span">
+              auto 会按素材语义路由：明确首帧使用 FL2VA，角色/场景参考使用 R2V，无参考图使用 FL2VA。GPU 在网关内严格串行，queued 表示正常排队。
             </div>
           </div>
         </fieldset>
@@ -1073,6 +1097,12 @@ function VideoProviderTestPanel({ config }: { config: RuntimeProviderConfig }) {
             generate_audio: draft.generate_audio,
             watermark: draft.watermark,
           }
+        : config.provider_name === "minimax_h3_gateway"
+          ? {
+              size: draft.size.trim(),
+              duration_sec: h3Duration(draft.duration),
+              steps: requiredFiniteNumber(draft.steps, "采样步数"),
+            }
         : {
             size: draft.size.trim(),
             frames: requiredFiniteNumber(draft.frames, "帧数"),
@@ -1112,7 +1142,7 @@ function VideoProviderTestPanel({ config }: { config: RuntimeProviderConfig }) {
       <div className="model-config-header">
         <div>
           <span>VIDEO CALL TEST</span>
-          <h2>{["ltx23_api", "seedance2_api"].includes(config.provider_name) ? "文生/参考生视频调用测试" : "图生视频调用测试"}</h2>
+          <h2>{["ltx23_api", "seedance2_api", "minimax_h3_gateway"].includes(config.provider_name) ? "文生/参考生视频调用测试" : "图生视频调用测试"}</h2>
           <p>对应 POST /api/providers/test，使用当前已生效的服务地址。</p>
         </div>
         <div className="model-readiness ready">
@@ -1139,10 +1169,12 @@ function VideoProviderTestPanel({ config }: { config: RuntimeProviderConfig }) {
               </label>
             ) : null}
             <label className="model-form-span">
-              {config.provider_name === "seedance2_api" ? "参考图片 URL（可选）" : "首帧参考图 URL"}
+              {["seedance2_api", "minimax_h3_gateway"].includes(config.provider_name) ? "参考图片 URL（可选）" : "首帧参考图 URL"}
               <input placeholder="https://files.example.com/first-frame.png" required={config.provider_name === "wan2_i2v_api"} type="url" value={draft.reference} onChange={(event) => setField("reference", event.target.value)} />
               <small>{config.provider_name === "seedance2_api"
                 ? "留空测试文生视频；填写时按“图片1”传给方舟。这里只测试一张图，制作工作台会发送片段绑定的全部资产。"
+                : config.provider_name === "minimax_h3_gateway"
+                  ? "auto 模式下：留空走 FL2VA 文生视频；普通参考图走 R2V。制作工作台能识别明确首帧并自动切换 FL2VA。"
                 : config.provider_name === "ltx23_api"
                   ? "留空时测试文生视频；填写后由主后端下载并上传首帧，测试图生视频。"
                   : "必须是后端能读取的图片 URL；主后端会先下载再上传。"}</small>
@@ -1175,6 +1207,13 @@ function VideoProviderTestPanel({ config }: { config: RuntimeProviderConfig }) {
                 添加水印
               </label>
             </div>
+          ) : config.provider_name === "minimax_h3_gateway" ? (
+            <div className="model-form-grid four-columns">
+              <ParameterInput label="画布尺寸" name="size" onChange={(_, value) => setField("size", value)} value={draft.size} />
+              <ParameterInput label="时长（0.2–15 秒）" min="0.2" name="duration" onChange={(_, value) => setField("duration", value)} step="0.1" type="number" value={draft.duration} />
+              <ParameterInput label="采样步数" min="1" name="steps" onChange={(_, value) => setField("steps", value)} type="number" value={draft.steps} />
+              <ParameterInput label="Seed（可选）" name="seed" onChange={(_, value) => setField("seed", value)} type="number" value={draft.seed} />
+            </div>
           ) : (
             <div className="model-form-grid four-columns">
               <ParameterInput label="画布尺寸" name="size" onChange={(_, value) => setField("size", value)} value={draft.size} />
@@ -1189,7 +1228,7 @@ function VideoProviderTestPanel({ config }: { config: RuntimeProviderConfig }) {
         </fieldset>
         <div className="model-form-actions">
           <button className="primary-button" disabled={busy} type="submit">{busy ? "生成中，请等待..." : draft.reference.trim() ? "发起图生视频测试" : "发起文生视频测试"}</button>
-          <span>该接口会同步等待上游队列任务完成，可能需要数分钟。</span>
+          <span>该操作会真实提交生成；异步 Provider 会先返回任务 ID，制作主链路的进度请在任务中心查看。</span>
         </div>
       </form>
 
@@ -1229,14 +1268,16 @@ function videoProviderTestDraft(config: RuntimeProviderConfig): VideoProviderTes
     prompt: "",
     negative_prompt: "",
     reference: "",
-    size: param("size", "1280*720"),
+    size: config.provider_name === "minimax_h3_gateway"
+      ? param("landscape_size", "1024x576")
+      : param("size", "1280*720"),
     frames: param("frames", "49"),
-    steps: param("steps", config.provider_name === "ltx23_api" ? "8" : "4"),
+    steps: param("steps", config.provider_name === "ltx23_api" ? "8" : config.provider_name === "minimax_h3_gateway" ? "19" : "4"),
     guidance: param("guidance", "1"),
     strength: param("strength", "0.78"),
     fps: param("fps", "16"),
     seed: param("seed"),
-    duration: "-1",
+    duration: config.provider_name === "minimax_h3_gateway" ? "5" : "-1",
     ratio: "16:9",
     resolution: param("resolution", "480p"),
     generate_audio: Boolean(config.default_params.generate_audio ?? true),
@@ -1256,6 +1297,14 @@ function seedanceDuration(value: string) {
   const duration = requiredFiniteNumber(value, "时长");
   if (duration !== -1 && (!Number.isInteger(duration) || duration < 4 || duration > 15)) {
     throw new Error("时长必须是 -1（智能）或 4–15 之间的整数秒。");
+  }
+  return duration;
+}
+
+function h3Duration(value: string) {
+  const duration = requiredFiniteNumber(value, "时长");
+  if (duration < 0.2 || duration > 15) {
+    throw new Error("MiniMax H3 时长必须在 0.2–15 秒之间。");
   }
   return duration;
 }
@@ -1428,6 +1477,8 @@ function runtimeParamsPayload(slot: ProviderSlot, providerName: string, params: 
     ? new Set(["size", "frames", "steps", "guidance", "fps", "seed", "strength"])
     : providerName === "seedance2_api"
       ? new Set(["resolution", "generate_audio", "watermark"])
+    : providerName === "minimax_h3_gateway"
+      ? new Set(["landscape_size", "portrait_size", "steps", "seed"])
     : providerName === "wan2_i2v_api"
       ? new Set(["protocol", "mode", "gpu_devices", "size", "seed", "frames", "steps", "guidance", "fps", "max_area", "upscale_1080p", "result_variant", "image_transport"])
       : null;

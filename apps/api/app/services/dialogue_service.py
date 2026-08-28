@@ -1,10 +1,16 @@
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
+from sqlalchemy.orm.attributes import flag_modified
 
 from fastapi import HTTPException, status
 
 from app.models import Character, Dialogue, Project, Script, Shot
 from app.schemas.dialogue import DialogueSaveRequest
+from app.scripts.speaker_policy import (
+    is_voice_only_speaker_name,
+    strip_voice_only_scene_characters,
+    voice_only_speaker_keys,
+)
 from app.services.workflow_state_service import mark_downstream_stages_pending
 
 
@@ -55,7 +61,10 @@ def list_dialogues_page(
 def synchronize_script_dialogues(db: Session, script: Script) -> list[Dialogue]:
     """Persist the script dialogue index and write stable row ids back to JSON."""
 
-    scenes = script.scenes if isinstance(script.scenes, list) else []
+    source_scenes = script.scenes if isinstance(script.scenes, list) else []
+    original_visual_cast = _scene_character_signature(source_scenes)
+    voice_only_keys = voice_only_speaker_keys(source_scenes)
+    scenes = strip_voice_only_scene_characters(source_scenes)
     existing = list(
         db.scalars(
             select(Dialogue)
@@ -100,7 +109,14 @@ def synchronize_script_dialogues(db: Session, script: Script) -> list[Dialogue]:
                 db.add(row)
                 db.flush()
             speaker = str(raw.get("speaker") or "").strip()
-            row.character_id = character_ids_by_name.get(speaker)
+            row.character_id = (
+                None
+                if is_voice_only_speaker_name(
+                    speaker,
+                    known_voice_only_keys=voice_only_keys,
+                )
+                else character_ids_by_name.get(speaker)
+            )
             row.speaker_name = speaker or "Character"
             row.text = text
             row.translation_zh = _optional_text(raw.get("translation_zh"))
@@ -133,6 +149,8 @@ def synchronize_script_dialogues(db: Session, script: Script) -> list[Dialogue]:
             db.delete(row)
     script.scenes = scenes
     script.dialogues = dialogue_index
+    if _scene_character_signature(scenes) != original_visual_cast:
+        flag_modified(script, "scenes")
     db.add(script)
     db.flush()
     return list_dialogues(db, script.project_id)
@@ -154,6 +172,7 @@ def save_dialogues(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Script not found")
 
     current = {row.id: row for row in list_dialogues(db, project_id)}
+    voice_only_keys = voice_only_speaker_keys(script.scenes)
     kept_ids: set[str] = set()
     stale_shot_ids: set[str] = set()
     for item in payload.dialogues:
@@ -182,7 +201,14 @@ def save_dialogues(
                 )
             stale_shot_ids.add(shot.id)
         row.shot_id = item.shot_id
-        row.character_id = item.character_id
+        row.character_id = (
+            None
+            if is_voice_only_speaker_name(
+                item.speaker_name,
+                known_voice_only_keys=voice_only_keys,
+            )
+            else item.character_id
+        )
         row.speaker_name = item.speaker_name
         row.text = item.text
         row.translation_zh = item.translation_zh
@@ -257,7 +283,9 @@ def _write_dialogues_back_to_script(
         for row in rows
     ]
     rows_by_id = {row.id: row for row in rows}
-    scenes = script.scenes if isinstance(script.scenes, list) else []
+    source_scenes = script.scenes if isinstance(script.scenes, list) else []
+    original_visual_cast = _scene_character_signature(source_scenes)
+    scenes = strip_voice_only_scene_characters(source_scenes)
     for scene in scenes:
         if not isinstance(scene, dict):
             continue
@@ -282,6 +310,8 @@ def _write_dialogues_back_to_script(
                 }
             )
     script.scenes = scenes
+    if _scene_character_signature(scenes) != original_visual_cast:
+        flag_modified(script, "scenes")
     db.add(script)
 
 
@@ -309,3 +339,11 @@ def _string_list(value: object) -> list[str]:
         for item in value
         if str(item).strip()
     ]
+
+
+def _scene_character_signature(scenes: list[dict]) -> tuple[tuple[str, ...], ...]:
+    return tuple(
+        tuple(str(item).strip() for item in (scene.get("characters") or []) if str(item).strip())
+        for scene in scenes
+        if isinstance(scene, dict)
+    )

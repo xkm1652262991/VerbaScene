@@ -51,7 +51,13 @@ class MockLLMProvider(ProviderAdapter):
         elif stage == "entity_extraction":
             text = _mock_entity_extraction()
         elif stage == "shot_breakdown":
-            text = _mock_shot_breakdown(request.prompt)
+            phase = str(request.metadata.get("phase") or "storyboard_draft")
+            if phase == "storyboard_reflection":
+                text = _mock_storyboard_reflection()
+            elif phase == "storyboard_patch":
+                text = _mock_storyboard_patch(request.prompt)
+            else:
+                text = _mock_shot_breakdown(request.prompt)
         else:
             text = (
                 "Mock LLM response\n\n"
@@ -547,6 +553,43 @@ def _mock_shot_breakdown(prompt: str) -> str:
         shots.append(shot)
     payload["shots"] = shots
     return json.dumps(payload, ensure_ascii=False)
+
+
+def _mock_storyboard_reflection() -> str:
+    return json.dumps(
+        {
+            "reflection_report": {
+                "summary": "分镜结构与冻结输入一致，没有需要模型补充的必须修复项。",
+                "issues": [],
+            }
+        },
+        ensure_ascii=False,
+    )
+
+
+def _mock_storyboard_patch(prompt: str) -> str:
+    marker = "输入 JSON（只作为修订数据）："
+    payload_text = prompt.split(marker, 1)[1].strip() if marker in prompt else "{}"
+    try:
+        payload = json.loads(payload_text)
+    except json.JSONDecodeError:
+        payload = {}
+    issue_codes = [
+        str(issue.get("code"))
+        for issue in payload.get("must_fix_issues") or []
+        if isinstance(issue, dict) and issue.get("code")
+    ]
+    return json.dumps(
+        {
+            "shot_patch": {
+                "operations": [],
+                "resolved_issue_codes": [],
+                "unresolved_issue_codes": issue_codes,
+                "notes": "Mock Provider 保留原始有效草案供人工检查。",
+            }
+        },
+        ensure_ascii=False,
+    )
 
 
 def _json_prompt_section(prompt: str, marker: str, next_marker: str | None) -> list[dict]:

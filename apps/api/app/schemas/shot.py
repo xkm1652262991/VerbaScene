@@ -95,11 +95,6 @@ class ShotReorderRequest(BaseModel):
     shots: list[ShotReorderItem]
 
 
-class ShotGenerationResponse(BaseModel):
-    shots: list[ShotRead]
-    task_id: str
-
-
 class ShotPromptPreviewRead(BaseModel):
     shot_id: str
     shot_no: int

@@ -137,7 +137,7 @@ def build_script_draft_prompt(
 - 英文对白先有交流意图，再选择符合 {source.english_level} 的自然说法。允许停顿、惊叹、犹豫和人物差异，不写成教科书轮流问答。
 - 候选教学表达只有在人物此刻确实需要时才使用；自然复现时，每次必须承担不同的行动或回应。
 - story_blueprint.required_phrases 来自用户明确要求，必须逐字出现在角色英文对白中。可以为它寻找更自然的时机，但不得省略、改写或只写进标题和动作说明。
-- 不写旁白、片头片尾、封面、绘图 Prompt、负面 Prompt、模型参数或制作解释。
+- AI 创意模式不主动新增旁白；导入模式若原文明确包含旁白、画外音或系统语音，可保留为 dialogues 中的非视觉说话人，但不得列入 characters、不得在 visible_action 中把声音具象化为角色。片头片尾、封面、绘图 Prompt、负面 Prompt、模型参数或制作解释不进入剧本。
 - sound_cues 只写与环境和动作同步发生的声音，不写配乐指令。
 - 不要求固定场景数、台词数、句长或总字数。场景数量服从故事和目标时长。
 - 除人物专名和 dialogues[].text 中的英文对白外，title、location、time_of_day、人物/道具描述、visible_action、story_purpose、start_state、end_state、mood、source_evidence、inferred_elements、emotion 和 sound_cues 全部使用自然简体中文。
@@ -305,6 +305,7 @@ def build_script_patch_prompt(
 - 除人物专名和 dialogues[].text 外，所有制作字段使用自然简体中文普通字符串或字符串数组，不保留英文制作句、Markdown 或状态字典。
 - 删除没有剧情依据的厘米、角度、百分比和帧级伪精确调度，保留动作的相对位置、方向、原因和结果。
 - 不增加与问题无关的反派、追逐、倒计时、魔法道具、说教或模板反转。
+- 旁白、画外音、解说、系统语音和未出镜引导声只保留在 dialogues，不得因修订被加入 characters 或具象化为画面角色。
 - 不按字数、句数或固定场景数改稿。
 - 每个 must_fix 问题代码必须且只能进入 resolved_issue_codes 或 unresolved_issue_codes；不能假装解决。
 

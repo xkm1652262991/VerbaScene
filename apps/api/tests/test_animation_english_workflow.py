@@ -33,9 +33,9 @@ from app.services.entity_service import generate_entities
 from app.services.asset_resolver_service import resolve_generation_assets
 from app.services.project_service import create_project
 from app.scripts.service import generate_script_now
+from app.production.shot_direction.service import generate_shots_now
 from app.services.shot_service import (
     compile_shot_video_prompt,
-    generate_shots,
     preview_shot_video_prompt,
     update_shot_reference_assets,
     update_shot_video_reference,
@@ -173,18 +173,18 @@ class AnimationEnglishWorkflowTests(unittest.TestCase):
             with (
                 patch("app.scripts.service.provider_registry.get", return_value=provider),
                 patch("app.services.entity_service.provider_registry.get", return_value=provider),
-                patch("app.services.shot_service.provider_registry.get", return_value=provider),
+                patch("app.production.shot_direction.service.provider_registry.get", return_value=provider),
             ):
                 script, script_task = generate_script_now(db, project.id)
                 with self.assertRaises(HTTPException) as missing_entities:
-                    generate_shots(db, project.id)
+                    generate_shots_now(db, project.id)
                 self.assertEqual(missing_entities.exception.status_code, 409)
                 self.assertEqual(
                     missing_entities.exception.detail,
                     "生成片段方案前，请先从剧本提取角色和场景设定",
                 )
                 characters, scenes, props, entity_task = generate_entities(db, project.id)
-                shots, shot_task = generate_shots(db, project.id)
+                shots, shot_task = generate_shots_now(db, project.id)
 
             self.assertEqual(script_task.status, "succeeded")
             self.assertEqual(

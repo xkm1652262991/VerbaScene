@@ -16,7 +16,7 @@ class Project(IdMixin, TimestampMixin, Base):
     user_id: Mapped[str | None] = mapped_column(String(36), index=True)
     title: Mapped[str] = mapped_column(String(255), nullable=False)
     style: Mapped[str] = mapped_column(
-        String(80),
+        Text,
         default="高品质风格化三维儿童动画",
         nullable=False,
     )

@@ -171,6 +171,28 @@ def shot_video_provider_params(
             "generate_audio": settings.seedance2_generate_audio,
             "watermark": settings.seedance2_watermark,
         }
+    if provider_name == "minimax_h3_gateway":
+        ratio = str(getattr(shot.project, "aspect_ratio", None) or "16:9")
+        size = (
+            settings.minimax_h3_gateway_portrait_size
+            if ratio == "9:16"
+            else settings.minimax_h3_gateway_landscape_size
+        )
+        params: dict[str, Any] = {
+            "duration_mode": resolved_mode,
+            "duration_sec": float(resolved_duration or Decimal("5")),
+            "ratio": ratio,
+            "size": size,
+            "steps": settings.minimax_h3_gateway_steps,
+        }
+        if settings.minimax_h3_gateway_seed is not None:
+            params["seed"] = settings.minimax_h3_gateway_seed
+        assert_video_provider_duration(
+            provider,
+            params["duration_sec"],
+            shot_no=shot.shot_no,
+        )
+        return params
     if provider_name == "mock":
         params = {
             **shot_video_params(

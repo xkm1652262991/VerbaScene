@@ -33,6 +33,7 @@ const TASK_STATUS_FILTERS: Array<{ id: "all" | GenerationTaskStatus; label: stri
 const TASK_TYPE_FILTERS = [
   { id: "all", label: "全部类型" },
   { id: "script_generation", label: "剧本生成" },
+  { id: "shot_breakdown", label: "分镜导演" },
   { id: "shot_video_candidate_generation", label: "镜头视频" },
   { id: "project_video_candidate_batch", label: "视频批次" },
 ] as const;
@@ -124,6 +125,66 @@ function scriptQualityGate(task: GenerationTask) {
     legacy_record: "历史任务记录",
   };
   return { gate, label: labels[gate] ?? gate };
+}
+
+function shotDirectionQualitySummary(task: GenerationTask) {
+  if (task.task_type !== "shot_breakdown" || task.status !== "succeeded") {
+    return null;
+  }
+  const report = task.result_payload.director_report;
+  if (!report || typeof report !== "object" || Array.isArray(report)) {
+    return "这是反思式分镜导演上线前的历史记录。";
+  }
+  const qualityGate = typeof task.result_payload.quality_gate === "string"
+    ? task.result_payload.quality_gate
+    : "legacy_record";
+  const patchApplied = task.result_payload.patch_applied === true;
+  const patchedShotNos = Array.isArray(task.result_payload.patched_shot_nos)
+    ? task.result_payload.patched_shot_nos.filter((value): value is number => typeof value === "number")
+    : [];
+  const missingAssets = Array.isArray(task.result_payload.asset_gaps)
+    ? task.result_payload.asset_gaps.length
+    : 0;
+  const unresolvedCodes = Array.isArray(task.result_payload.unresolved_issue_codes)
+    ? task.result_payload.unresolved_issue_codes.filter((value): value is string => typeof value === "string")
+    : [];
+  const readiness = task.result_payload.generation_ready === true
+    ? "默认参考资产已齐全"
+    : `建议补充 ${missingAssets} 项角色或场景参考图`;
+  if (qualityGate === "review_unavailable") {
+    return `草案生产合同有效，但分镜审稿本次不可用；${readiness}。`;
+  }
+  if (qualityGate === "needs_attention") {
+    const patchSummary = patchApplied
+      ? `已定点修订片段 ${patchedShotNos.join("、")}`
+      : "未应用定点修订";
+    return `${patchSummary}；${unresolvedCodes.length ? `待检查 ${unresolvedCodes.join("、")}` : "仍建议人工检查"}；${readiness}。`;
+  }
+  return `草案、独立审稿和确定性合同已完成；${readiness}。`;
+}
+
+function shotDirectionQualityGate(task: GenerationTask) {
+  if (task.task_type !== "shot_breakdown" || task.status !== "succeeded") {
+    return null;
+  }
+  const gate = typeof task.result_payload.quality_gate === "string"
+    ? task.result_payload.quality_gate
+    : "legacy_record";
+  const labels: Record<string, string> = {
+    pass: "导演检查通过",
+    needs_attention: "需要人工检查",
+    review_unavailable: "审稿不可用",
+    legacy_record: "历史任务记录",
+  };
+  return { gate, label: labels[gate] ?? gate };
+}
+
+function taskQualitySummary(task: GenerationTask) {
+  return shotDirectionQualitySummary(task) ?? scriptQualitySummary(task);
+}
+
+function taskQualityGate(task: GenerationTask) {
+  return shotDirectionQualityGate(task) ?? scriptQualityGate(task);
 }
 
 function contextLinkHref(task: GenerationTask, targetType: string, targetId: string) {
@@ -414,7 +475,7 @@ export function TaskCenterPage({
       {!isLoading && visibleTasks.length > 0 ? (
         <div className="task-list">
           {visibleTasks.map((task) => {
-            const qualityGate = scriptQualityGate(task);
+            const qualityGate = taskQualityGate(task);
             const childSummary = task.child_summary ?? {};
             const childCounts = [...ACTIVE_GENERATION_TASK_STATUSES, ...TERMINAL_GENERATION_TASK_STATUSES]
               .map((status) => [status, childSummary[status] ?? 0] as const)
@@ -461,7 +522,7 @@ export function TaskCenterPage({
                 ) : null}
                 {task.error_message ? <p className="task-error"><strong>{task.error_code ?? "task_failed"}</strong> · {task.error_message}</p> : null}
                 {qualityGate ? <span className={`script-quality-gate ${qualityGate.gate}`}>{qualityGate.label}</span> : null}
-                {scriptQualitySummary(task) ? <p className="task-quality-note">{scriptQualitySummary(task)}</p> : null}
+                {taskQualitySummary(task) ? <p className="task-quality-note">{taskQualitySummary(task)}</p> : null}
                 <div className="task-context-links">
                   {task.context_links.map((link) => {
                     const href = contextLinkHref(task, link.target_type, link.target_id);

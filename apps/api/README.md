@@ -7,7 +7,7 @@
 ```text
 FastAPI
   → 领域服务
-  → SQLite（默认）或 PostgreSQL
+  → PostgreSQL（推荐）或 SQLite（开发后备）
   → LocalMediaStore
   → 数据库租约任务运行时
   → LLM / Image / Video Provider Adapter
@@ -34,7 +34,7 @@ cd apps/api
 uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
 ```
 
-默认配置使用 Mock Provider 和 `../../storage/local/content.sqlite3`，不会自动调用付费生成服务。
+原生开发仍可使用 Mock Provider 和 `../../storage/local/content.sqlite3`，不会自动调用付费生成服务。
 
 检查：
 
@@ -59,6 +59,7 @@ LOCAL_DATABASE_FILENAME=content.sqlite3
 ```env
 PERSISTENCE_MODE=database
 DATABASE_URL=postgresql+psycopg://user:password@localhost:5432/animation_drama
+DATABASE_SCHEMA=verbascene_app
 ```
 
 PostgreSQL 模式启动前执行：
@@ -66,6 +67,16 @@ PostgreSQL 模式启动前执行：
 ```bash
 alembic upgrade head
 ```
+
+`DATABASE_SCHEMA` 可留空并使用默认 `search_path`；指定时只允许字母、数字和下划线。
+Alembic 在线迁移会创建该 schema，并把版本表与业务表写入其中。将现有 SQLite 数据迁往
+空 PostgreSQL schema 时使用：
+
+```bash
+.venv/bin/python scripts/copy_local_to_database.py
+```
+
+复制工具会校验目标为空和各表行数，不会覆盖或合并旧 PostgreSQL 数据。
 
 不要对本地 SQLite 文件运行 PostgreSQL Alembic 历史。
 
@@ -90,7 +101,7 @@ Handler；未完成工作可通过过期租约恢复。详细状态机和取消/
 
 ## Provider
 
-运行槽位为 `llm`、`image` 和 `video`。内置目录包含 Mock、OpenAI-compatible、DashScope、Gemini、ComfyUI、Seedance、LTX、Wan 等 Adapter；注册成功不代表已经配置或完成真实生成验收。
+运行槽位为 `llm`、`image` 和 `video`。内置目录包含 Mock、OpenAI-compatible、DashScope、Gemini、ComfyUI、Seedance、LTX、MiniMax H3、Wan 等 Adapter；注册成功不代表已经配置或完成真实生成验收。
 
 ```text
 GET    /api/providers

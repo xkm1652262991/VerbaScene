@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 
-AVD_PROMPT_PACK_VERSION = 10
+AVD_PROMPT_PACK_VERSION = 11
 AVD_PROMPT_PACK_SOURCE = "ai-visual-director@113c0c1-distilled"
 
 
@@ -34,7 +34,7 @@ SCRIPT_REWRITER_TEMPLATE = f"""\
 - AI 创意模式可围绕创意描述和英语等级合理创作；导入模式优先保留原剧本事实和对白意图。
 - 先建立具体欲望、阻碍、选择、后果和结尾兑现，再写生产场景；不强制反派、追逐或模板反转。
 - 面向 A1 学习者时简化词汇和句法，但保留人物动机、幽默、悬念和真实交流意图。
-- 暂不写旁白、片头片尾、封面文案。
+- AI 创意模式不主动新增旁白；导入文本中已有的旁白、画外音或系统语音只作为非视觉说话人保留，不建立角色形象。暂不写片头片尾、封面文案。
 - 英文角色对白必填，可附可空的中文释义，并为视频模型提供同步音效提示。
 - 制作描述使用自然简体中文，dialogues[].text 只写角色实际说出的英文。
 - 不使用字数、句数、固定场景数或 Prompt 长度作为质量判断。
@@ -69,7 +69,7 @@ ENTITY_EXTRACTOR_TEMPLATE = f"""\
 
 {RUNTIME_NEUTRALITY_RULES}
 
-只从当前剧本提取角色、场景和跨镜头关键道具，不新增实体。
+只从当前剧本提取角色、场景和跨镜头关键道具，不新增实体。旁白、画外音、解说、系统语音和未在 visible_action 中出镜的虚拟引导声不是角色，不输出资产卡或参考图 Prompt。
 稳定身份和临时状态分开；人物、动物和自主机器人属于角色。
 同一次调用直接输出每个实体的最终参考图中文自然语言 Prompt。
 除专有名称、JSON 字段名、id 和约定枚举值外，所有资产描述、证据概括和 Prompt 使用自然简体中文；外文输入先翻译含义。
@@ -82,11 +82,24 @@ STORYBOARD_BREAKER_TEMPLATE = f"""\
 
 {RUNTIME_NEUTRALITY_RULES}
 
-一次调用完成镜头结构和唯一的 shot_storyboard 图片 Prompt；该分镜图是预览和可选首帧候选，必须描述动作起始状态，但不会自动作为视频输入。
+草案阶段完成镜头结构和唯一的 shot_storyboard 图片 Prompt；定点修订阶段只修改 Reflection 点名范围。该分镜图是预览和可选首帧候选，必须描述动作起始状态，但不会自动作为视频输入。
 每个镜头只承担一个叙事目的，按物理节奏分配时长；复杂动作拆镜。
 shot_storyboard 的 visible_character_ids 和 visible_prop_ids 是参考资产选择的唯一依据。
 除专有名称、JSON 字段名、id 和约定枚举值外，镜头描述、动作、情绪、帧计划、图片和视频 Prompt 全部使用自然简体中文；不得复制外文描述句。
 只输出 {{"shots": [...]}}，具体字段以任务输入合同为准；不要输出编译器栏目或后期元话术。
+"""
+
+
+STORYBOARD_REVIEWER_TEMPLATE = f"""\
+你是与分镜草案阶段隔离的动画短剧分镜审稿人。
+
+{RUNTIME_NEUTRALITY_RULES}
+
+只依据冻结剧本、实体设定、metadata_only 资产报告、当前 ShotDraft 和确定性合同报告审稿。
+issues.category 只能是 coverage、continuity、dialogue、cinematography、asset_feasibility、production；severity 只能是 must_fix 或 editorial_note。
+must_fix 必须点名最小 shot_nos，且只用于事实遗漏、连续性矛盾、Dialogue 错绑或不可执行的生产合同问题。审美偏好和缺少推荐参考图通常是 editorial_note。
+不得重写 ShotDraft，不得输出 Patch，不得声称查看过图片像素，不得生成、采用或删除媒体。草案成立时明确通过，不为了显示审稿价值而制造问题。
+严格服从 ReflectionReport JSON 合同。
 """
 
 
@@ -146,6 +159,12 @@ BUILTIN_AVD_PROMPT_TEMPLATES = [
         name="AVD 分镜拆解运行时模板",
         content=STORYBOARD_BREAKER_TEMPLATE,
         metadata=_metadata(avd_skill="storyboard/video-director", output_type="shots"),
+    ),
+    BuiltinPromptTemplate(
+        agent_type="storyboard_reviewer",
+        name="AVD 分镜独立审稿运行时模板",
+        content=STORYBOARD_REVIEWER_TEMPLATE,
+        metadata=_metadata(avd_skill="storyboard/review", output_type="reflection_report"),
     ),
     BuiltinPromptTemplate(
         agent_type="shot_video",

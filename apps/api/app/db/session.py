@@ -12,7 +12,11 @@ from app.core.config import settings
 from app.db.base import Base
 
 
-def create_database_engine(database_url: str) -> Engine:
+def create_database_engine(
+    database_url: str,
+    *,
+    database_schema: str | None = None,
+) -> Engine:
     url = make_url(database_url)
     connect_args: dict[str, object] = {}
 
@@ -24,6 +28,8 @@ def create_database_engine(database_url: str) -> Engine:
             "check_same_thread": False,
             "timeout": 30,
         }
+    elif url.get_backend_name() == "postgresql" and database_schema:
+        connect_args = {"options": f"-csearch_path={database_schema}"}
 
     database_engine = create_engine(
         database_url,
@@ -462,7 +468,10 @@ def _backup_local_database(database_engine: Engine, migration_id: str) -> Path |
     return backup_path
 
 
-engine = create_database_engine(settings.effective_database_url)
+engine = create_database_engine(
+    settings.effective_database_url,
+    database_schema=settings.database_schema,
+)
 atexit.register(engine.dispose)
 
 SessionLocal = sessionmaker(

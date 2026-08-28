@@ -22,6 +22,7 @@ from app.models import Character, GenerationTask, Project, Prop, Scene, Script
 from app.providers.defaults import provider_registry
 from app.providers.types import ProviderRequest, ProviderStatus, ProviderType
 from app.schemas.entity import CharacterUpdate, PropUpdate, SceneUpdate
+from app.scripts.speaker_policy import filter_visual_characters
 from app.services.agent_config_service import resolve_agent_config
 from app.services.dialogue_service import synchronize_script_dialogues
 from app.services.failure_reason_service import normalize_failure_reason
@@ -53,7 +54,7 @@ def get_project_or_404(db: Session, project_id: str) -> Project:
 
 
 def list_characters(db: Session, project_id: str) -> list[Character]:
-    return _list_current_entities(db, project_id, Character)
+    return _list_current_characters(db, project_id)
 
 
 def list_scenes(db: Session, project_id: str) -> list[Scene]:
@@ -107,7 +108,7 @@ def list_all_entities(db: Session, project_id: str) -> tuple[list[Character], li
 
 def get_current_entities(db: Session, project_id: str) -> tuple[list[Character], list[Scene], list[Prop]]:
     return (
-        _list_current_entities(db, project_id, Character),
+        _list_current_characters(db, project_id),
         _list_current_entities(db, project_id, Scene),
         _list_current_entities(db, project_id, Prop),
     )
@@ -116,6 +117,23 @@ def get_current_entities(db: Session, project_id: str) -> tuple[list[Character],
 def get_current_approved_entities(db: Session, project_id: str) -> tuple[list[Character], list[Scene], list[Prop]]:
     """Compatibility alias: version adoption replaced stage approval."""
     return get_current_entities(db, project_id)
+
+
+def _list_current_characters(db: Session, project_id: str) -> list[Character]:
+    return filter_visual_characters(
+        _list_current_entities(db, project_id, Character),
+        _latest_script_scenes(db, project_id),
+    )
+
+
+def _latest_script_scenes(db: Session, project_id: str) -> list[dict[str, Any]]:
+    scenes = db.scalar(
+        select(Script.scenes)
+        .where(Script.project_id == project_id)
+        .order_by(Script.version.desc(), Script.created_at.desc())
+        .limit(1)
+    )
+    return scenes if isinstance(scenes, list) else []
 
 
 def _list_current_entities(
@@ -268,6 +286,7 @@ def generate_entities(db: Session, project_id: str) -> tuple[list[Character], li
             script_scenes=script.scenes,
             script_content=script.content,
         )
+        result["characters"] = filter_visual_characters(result["characters"], script.scenes)
         update_task_progress(db, task, "已根据剧本和资产类型自动补全设定", 78)
     except (ValueError, json.JSONDecodeError) as exc:
         message = f"Entity extraction JSON parse failed: {exc}"
@@ -367,6 +386,7 @@ def recover_entity_extraction_task(
             script_scenes=script.scenes,
             script_content=script.content,
         )
+        result["characters"] = filter_visual_characters(result["characters"], script.scenes)
     except (ValueError, json.JSONDecodeError) as exc:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -557,6 +577,7 @@ def _with_approved_entity_context(
         "已确认资产上下文：\n"
         "- previous_approved_entities 是上一版已确认资产。同一实体再次出现时，应继承其不可变身份特征，除非已确认剧本明确要求改变。\n"
         "- 有自主动作、表情或剧情行为的人、动物、怪物和自主机器人必须归入 characters，不得归入 props。\n"
+        "- 旁白、画外音、解说、系统语音和未出镜的虚拟引导声不是可视角色；即使旧资产中存在同名记录，也不得继承或生成角色参考图。\n"
         "- 受伤、康复、湿透、表情、姿态、正在手持某物等是镜头状态，不得写进实体的永久身份或固定视觉提示词。\n"
         f"已确认资产 JSON：\n{json.dumps(approved_entities, ensure_ascii=False, default=str)}"
     )

@@ -13,6 +13,7 @@ class AVDPromptPackTests(unittest.TestCase):
                 "script_reviewer",
                 "extractor",
                 "storyboard_breaker",
+                "storyboard_reviewer",
                 "shot_video",
             }
             <= agent_types
@@ -25,7 +26,7 @@ class AVDPromptPackTests(unittest.TestCase):
         self.assertIn("Skill 只提供生成结构、连续性约束和质检标准", contents)
         self.assertIn("不提供默认题材、时代、流派或情绪", contents)
         self.assertIn("只从当前剧本提取角色、场景和跨镜头关键道具", contents)
-        self.assertIn("一次调用完成镜头结构", contents)
+        self.assertIn("草案阶段完成镜头结构", contents)
         self.assertIn("visible_character_ids", contents)
         self.assertIn("英文对白逐字写入", contents)
 

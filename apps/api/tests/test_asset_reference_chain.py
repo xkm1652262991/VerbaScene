@@ -148,7 +148,7 @@ class AssetReferenceChainTests(unittest.TestCase):
         )
         self.assertEqual(
             resolution.reference_metadata["video_reference_policy"],
-            "optional_first_frame_plus_2_characters_1_scene_v2",
+            "optional_first_frame_plus_20_characters_1_scene_v3",
         )
 
     def test_video_generation_does_not_auto_use_existing_storyboard(self):
@@ -185,7 +185,7 @@ class AssetReferenceChainTests(unittest.TestCase):
             resolution.reference_metadata["video_first_frame_asset_id"],
         )
 
-    def test_video_generation_caps_character_images_at_two(self):
+    def test_video_generation_includes_more_than_two_character_images(self):
         shot = SimpleNamespace(
             id="shot-1",
             character_ids=["character-1", "character-2", "character-3"],
@@ -213,7 +213,17 @@ class AssetReferenceChainTests(unittest.TestCase):
 
         self.assertEqual(
             [asset.asset_id for asset in resolution.reference_assets],
-            ["storyboard-ref", "character-ref", "character-ref-2", "scene-ref"],
+            [
+                "storyboard-ref",
+                "character-ref",
+                "character-ref-2",
+                "character-ref-3",
+                "scene-ref",
+            ],
+        )
+        self.assertEqual(
+            resolution.reference_metadata["max_video_image_references"],
+            22,
         )
 
     def test_image_generation_service_forwards_resolved_references_to_provider(self):

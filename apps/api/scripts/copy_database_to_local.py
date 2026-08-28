@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 import argparse
+from datetime import datetime, timezone
 import sys
 from pathlib import Path
 
-from sqlalchemy import JSON, func, insert, select
+from sqlalchemy import DateTime, JSON, func, insert, select
 from sqlalchemy.engine import Engine
 
 API_ROOT = Path(__file__).resolve().parents[1]
@@ -25,12 +26,19 @@ def _table_counts(database_engine: Engine) -> dict[str, int]:
         }
 
 
-def copy_database(source_url: str, target_url: str, batch_size: int = 200) -> dict[str, int]:
-    if source_url == target_url:
+def copy_database(
+    source_url: str,
+    target_url: str,
+    batch_size: int = 200,
+    *,
+    source_schema: str | None = None,
+    target_schema: str | None = None,
+) -> dict[str, int]:
+    if source_url == target_url and source_schema == target_schema:
         raise ValueError("Source and target database URLs must be different")
 
-    source_engine = create_database_engine(source_url)
-    target_engine = create_database_engine(target_url)
+    source_engine = create_database_engine(source_url, database_schema=source_schema)
+    target_engine = create_database_engine(target_url, database_schema=target_schema)
     initialize_database(target_engine)
 
     try:
@@ -45,11 +53,18 @@ def copy_database(source_url: str, target_url: str, batch_size: int = 200) -> di
         copied_counts: dict[str, int] = {}
         with source_engine.connect() as source, target_engine.begin() as target:
             for table in Base.metadata.sorted_tables:
-                result = source.execute(select(table))
+                rows = [
+                    _compact_row(table, row, target_is_postgres=target_engine.dialect.name == "postgresql")
+                    for row in source.execute(select(table)).mappings()
+                ]
+                if table.name == "generation_tasks":
+                    rows = _parent_first(rows)
                 copied = 0
-                while rows := result.mappings().fetchmany(batch_size):
-                    target.execute(insert(table), [_compact_row(table, row) for row in rows])
-                    copied += len(rows)
+                for offset in range(0, len(rows), batch_size):
+                    batch = rows[offset : offset + batch_size]
+                    if batch:
+                        target.execute(insert(table), batch)
+                        copied += len(batch)
                 copied_counts[table.name] = copied
 
         target_counts = _table_counts(target_engine)
@@ -66,12 +81,44 @@ def copy_database(source_url: str, target_url: str, batch_size: int = 200) -> di
         target_engine.dispose()
 
 
-def _compact_row(table: object, row: object) -> dict[str, object]:
+def _compact_row(
+    table: object,
+    row: object,
+    *,
+    target_is_postgres: bool = False,
+) -> dict[str, object]:
     payload = dict(row)
     for column in table.columns:
         if isinstance(column.type, JSON) and column.name in payload:
             payload[column.name] = compact_json_payload(payload[column.name])
+        if (
+            target_is_postgres
+            and isinstance(column.type, DateTime)
+            and isinstance(payload.get(column.name), datetime)
+            and payload[column.name].tzinfo is None
+        ):
+            payload[column.name] = payload[column.name].replace(tzinfo=timezone.utc)
     return payload
+
+
+def _parent_first(rows: list[dict[str, object]]) -> list[dict[str, object]]:
+    remaining = {str(row["id"]): row for row in rows}
+    ordered: list[dict[str, object]] = []
+    emitted: set[str] = set()
+    while remaining:
+        ready = [
+            task_id
+            for task_id, row in remaining.items()
+            if not row.get("parent_task_id")
+            or str(row["parent_task_id"]) in emitted
+            or str(row["parent_task_id"]) not in remaining
+        ]
+        if not ready:
+            raise RuntimeError("Generation task parent references contain a cycle")
+        for task_id in ready:
+            ordered.append(remaining.pop(task_id))
+            emitted.add(task_id)
+    return ordered
 
 
 def main() -> None:

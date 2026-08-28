@@ -1,11 +1,10 @@
-from fastapi import APIRouter, Depends, Query, Response, status
+from fastapi import APIRouter, Depends, Header, Query, Response, status
 from sqlalchemy.orm import Session
 
 from app.db import get_db
 from app.schemas.common import ApiResponse, PageResponse
 from app.schemas.shot import (
     ShotCreate,
-    ShotGenerationResponse,
     ShotPromptPreviewRead,
     ShotRead,
     ShotReferenceAssetsUpdate,
@@ -14,11 +13,13 @@ from app.schemas.shot import (
     ShotVideoReferenceUpdate,
     ShotVideoPromptPreviewRead,
 )
+from app.schemas.task import GenerationTaskRead
+from app.platform.tasks.runtime import get_task_runtime
+from app.production.shot_direction.service import create_shot_direction_task
 from app.services.shot_service import (
     compile_shot_video_prompt,
     create_shot,
     delete_shot,
-    generate_shots,
     list_shots,
     list_shots_page,
     reorder_shots,
@@ -32,13 +33,19 @@ from app.services.pre_image_service import build_project_prompt_previews
 router = APIRouter(tags=["shots"])
 
 
-@router.post("/api/projects/{project_id}/shots/generate", response_model=ApiResponse[ShotGenerationResponse])
+@router.post(
+    "/api/projects/{project_id}/shots/generate",
+    response_model=ApiResponse[GenerationTaskRead],
+    status_code=status.HTTP_202_ACCEPTED,
+)
 def generate_project_shots_endpoint(
     project_id: str,
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
     db: Session = Depends(get_db),
-) -> ApiResponse[ShotGenerationResponse]:
-    shots, task = generate_shots(db, project_id)
-    return ApiResponse(data={"shots": shots, "task_id": task.id})
+) -> ApiResponse[GenerationTaskRead]:
+    task = create_shot_direction_task(db, project_id, idempotency_key=idempotency_key)
+    get_task_runtime().wake()
+    return ApiResponse(data=task)
 
 
 @router.get("/api/projects/{project_id}/shots", response_model=PageResponse[ShotRead])

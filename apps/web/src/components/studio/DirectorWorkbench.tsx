@@ -11,6 +11,7 @@ import type {
   ShotVideoPromptPreview,
 } from "../../types/stageFive";
 import { AssetPreview } from "./AssetPreview";
+import { DirectorCheckPanel } from "./DirectorCheckPanel";
 import { GenerationTaskBanner } from "./GenerationTaskBanner";
 import { generationTaskStatusLabel, isGenerationTaskActive } from "../../utils/generationTask";
 
@@ -34,6 +35,7 @@ type DirectorWorkbenchProps = {
   batchTask: GenerationTask | null;
   candidates: AssetCandidate[];
   dialogues: Dialogue[];
+  directorReportTask: GenerationTask | null;
   entities: EntityBundle;
   imageProfileId: string;
   imageProfiles: ImageProviderProfile[];
@@ -63,6 +65,7 @@ type DirectorWorkbenchProps = {
   promptPreview: ShotVideoPromptPreview | null;
   selectedShot: Shot;
   selectedShotTask: GenerationTask | null;
+  shotDirectionTask: GenerationTask | null;
   selectedVideoProvider?: ProviderDescriptor;
   shots: Shot[];
   videoTasks: GenerationTask[];
@@ -74,6 +77,7 @@ export function DirectorWorkbench({
   batchTask,
   candidates,
   dialogues,
+  directorReportTask,
   entities,
   imageProfileId,
   imageProfiles,
@@ -103,6 +107,7 @@ export function DirectorWorkbench({
   promptPreview,
   selectedShot,
   selectedShotTask,
+  shotDirectionTask,
   selectedVideoProvider,
   shots,
   videoTasks,
@@ -218,6 +223,7 @@ export function DirectorWorkbench({
   }, [videoTasks]);
   const selectedShotTaskActive = Boolean(selectedShotTask && isGenerationTaskActive(selectedShotTask));
   const batchTaskActive = Boolean(batchTask && isGenerationTaskActive(batchTask));
+  const shotDirectionTaskActive = Boolean(shotDirectionTask && isGenerationTaskActive(shotDirectionTask));
   const inspectedAsset = adoptedImages.find((asset) => asset.id === inspectedAssetId) ?? null;
   const previewAsset = previewChoice?.kind === "asset"
     ? selectedShotAssets.find((asset) => asset.id === previewChoice.id) ?? null
@@ -627,6 +633,17 @@ export function DirectorWorkbench({
           <div><span>PREVIEW</span><h2>视频预览</h2></div>
           <span className="director-model-badge">{selectedVideoProvider?.model ?? "视频模型未配置"}</span>
         </header>
+        {shotDirectionTask && shotDirectionTask.status !== "succeeded" ? (
+          <GenerationTaskBanner
+            actionBusy={actionBusy}
+            compact
+            onCancel={onCancelTask}
+            onRetry={onRetryTask}
+            task={shotDirectionTask}
+            title="分镜导演任务"
+          />
+        ) : null}
+        {directorReportTask?.status === "succeeded" ? <DirectorCheckPanel task={directorReportTask} /> : null}
         {batchTask && batchTask.status !== "succeeded" ? (
           <GenerationTaskBanner
             actionBusy={actionBusy}
@@ -782,7 +799,14 @@ export function DirectorWorkbench({
             >
               {batchTaskActive ? "批次生成中" : "批量生成视频"}
             </button>
-            <button className="secondary-button" disabled={actionBusy} onClick={onGenerateShots} type="button">重新生成方案</button>
+            <button
+              className="secondary-button"
+              disabled={shotDirectionTaskActive || actionBusy}
+              onClick={onGenerateShots}
+              type="button"
+            >
+              {shotDirectionTaskActive ? "分镜导演运行中" : "重新生成方案"}
+            </button>
           </div>
         </header>
         <div className="director-timeline-scroll">

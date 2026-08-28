@@ -31,7 +31,11 @@ export function canCancelGenerationTask(task: GenerationTask) {
 export function canRetryGenerationTask(task: GenerationTask) {
   return (
     (task.status === "failed" || task.status === "cancelled")
-    && (task.task_type === "script_generation" || task.task_type === "shot_video_candidate_generation")
+    && (
+      task.task_type === "script_generation"
+      || task.task_type === "shot_breakdown"
+      || task.task_type === "shot_video_candidate_generation"
+    )
   );
 }
 
@@ -58,7 +62,7 @@ export function generationTaskTypeLabel(taskType: string) {
     shot_video_regeneration_candidate: "历史镜头视频重生成",
     video_frame_extraction: "视频截帧",
     single_reference_image_candidate_generation: "单资产图片生成",
-    shot_breakdown: "片段拆解",
+    shot_breakdown: "分镜导演",
     entity_extraction: "实体提取",
     dialogue_audio_generation: "历史对白音频生成",
     speech_script_generation: "历史对白稿生成",

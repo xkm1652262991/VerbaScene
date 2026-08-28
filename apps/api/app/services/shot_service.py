@@ -1,6 +1,4 @@
 from datetime import datetime, timezone
-import hashlib
-import json
 import re
 from typing import Any
 from uuid import uuid4
@@ -9,33 +7,23 @@ from fastapi import HTTPException, status
 from sqlalchemy import func, select, update
 from sqlalchemy.orm import Session
 
-from app.agents import (
-    build_shot_breakdown_prompt,
-    build_shot_video_prompt,
-    parse_shot_breakdown_response,
-    segment_planning_contract,
-)
 from app.agents.camera_language import professional_movement, professional_shot_size
-from app.agents.style import resolve_visual_style
-from app.core.config import settings
 from app.models import Asset, Character, Dialogue, GenerationTask, Project, Prop, Scene, Script, Shot
-from app.providers.defaults import provider_registry
-from app.providers.types import ProviderRequest, ProviderStatus, ProviderType
+from app.production.shot_prompt_compiler import (
+    VIDEO_PROMPT_COMPILER_VERSION,
+    apply_video_prompt_field,
+    select_entities,
+    select_scene,
+    shot_prompt_fingerprint,
+)
 from app.schemas.shot import ShotCreate, ShotReorderRequest, ShotUpdate
-from app.services.agent_config_service import resolve_agent_config
 from app.services.asset_resolver_service import resolve_generation_assets
 from app.services.dialogue_service import bind_dialogues_to_shots, list_dialogues
 from app.services.entity_service import get_current_entities
-from app.services.task_service import mark_task_failed, mark_task_running, mark_task_succeeded, update_task_progress
 from app.services.workflow_state_service import (
     mark_downstream_stages_pending,
-    mark_stage_failed,
     mark_stage_ready,
-    mark_stage_running,
 )
-
-
-VIDEO_PROMPT_COMPILER_VERSION = "seedance2-shot-first-v6"
 
 
 def get_project_or_404(db: Session, project_id: str) -> Project:
@@ -98,194 +86,11 @@ def get_approved_entities(db: Session, project_id: str) -> tuple[list[Character]
 
 
 def generate_shots(db: Session, project_id: str) -> tuple[list[Shot], GenerationTask]:
-    """One LLM call produces the shot structure and its storyboard-first-frame prompt."""
-    project = get_project_or_404(db, project_id)
-    script = get_latest_approved_script(db, project_id)
-    characters, scenes, props = get_approved_entities(db, project_id)
-    dialogues = list_dialogues(db, project_id)
-    segment_contract = segment_planning_contract(project.target_duration_sec or 90)
-    agent_config = resolve_agent_config(
-        db,
-        agent_type="storyboard_breaker",
-        default_provider=settings.llm_provider,
-        default_model=settings.llm_model,
-    )
-    provider = provider_registry.get(ProviderType.LLM, agent_config.provider)
-    model = agent_config.model or provider.model
-    task = GenerationTask(
-        project_id=project_id,
-        task_type="shot_breakdown",
-        provider=provider.name,
-        model=model,
-        input_payload={
-            "script_id": script.id,
-            "character_ids": [item.id for item in characters],
-            "scene_ids": [item.id for item in scenes],
-            "prop_ids": [item.id for item in props],
-            "project_style": project.style,
-            "target_duration_sec": project.target_duration_sec or 90,
-            "segment_contract": segment_contract,
-            "image_prompt_flow": "storyboard_first_frame_direct_v1",
-        },
-        status=ProviderStatus.RUNNING.value,
-        started_at=datetime.now(timezone.utc),
-    )
-    db.add(task)
-    db.flush()
-    mark_stage_running(db, project_id, "shots", task_id=task.id)
-    mark_task_running(db, task, "文本模型正在一次生成分镜和图片 Prompt", 15)
+    """Synchronous compatibility helper for tests and maintenance scripts."""
 
-    response = provider.submit(
-        ProviderRequest(
-            project_id=project_id,
-            task_id=task.id,
-            model=model,
-            prompt=_with_agent_prompt(
-                agent_config.system_prompt,
-                build_shot_breakdown_prompt(
-                    script=script,
-                    characters=characters,
-                    scenes=scenes,
-                    props=props,
-                    style=resolve_visual_style(project.style, project.creative_settings),
-                    target_duration_sec=project.target_duration_sec or 90,
-                ),
-            ),
-            params={"temperature": 0.4},
-            metadata={"stage": "shot_breakdown", "image_prompt_flow": "storyboard_first_frame"},
-        )
-    )
-    if response.status != ProviderStatus.SUCCEEDED:
-        message = response.error.error_message if response.error else "LLM provider failed during shot breakdown"
-        code = response.error.error_code if response.error else "llm_provider_failed"
-        mark_task_failed(
-            db,
-            task,
-            code=code,
-            message=message,
-            raw_response=response.raw_response,
-            provider_task_id=response.provider_task_id,
-        )
-        mark_stage_failed(db, project_id, "shots", summary=message)
-        db.commit()
-        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=message)
+    from app.production.shot_direction.service import generate_shots_now
 
-    try:
-        update_task_progress(db, task, "正在整理分镜和图片 Prompt", 75)
-        shot_dicts = parse_shot_breakdown_response(
-            text=str(response.raw_response.get("text", "")),
-            characters=characters,
-            scenes=scenes,
-            props=props,
-            style_sentence=resolve_visual_style(project.style, project.creative_settings),
-            allowed_dialogue_ids={dialogue.id for dialogue in dialogues},
-            segment_contract=segment_contract,
-        )
-        for item in shot_dicts:
-            image_prompts = item.pop("image_prompts")
-            card = dict(item.get("shot_card") or {})
-            card["image_prompts"] = image_prompts
-            card["image_prompt_flow"] = "storyboard_first_frame_direct_v1"
-            item["shot_card"] = card
-            item["image_prompt"] = image_prompts["shot_storyboard"]["positive_prompt"]
-            item["negative_prompt"] = image_prompts["shot_storyboard"]["negative_prompt"]
-            _apply_video_prompt_field(
-                project=project,
-                data=item,
-                characters=characters,
-                scenes=scenes,
-                props=props,
-                dialogues=[
-                    dialogue
-                    for dialogue in dialogues
-                    if dialogue.id in set(item.get("dialogue_ids") or [])
-                ],
-            )
-    except (KeyError, ValueError) as exc:
-        message = f"LLM shot breakdown JSON parse failed: {exc}"
-        mark_task_failed(
-            db,
-            task,
-            code="shot_breakdown_parse_failed",
-            message=message,
-            raw_response=response.raw_response,
-            provider_task_id=response.provider_task_id,
-        )
-        mark_stage_failed(db, project_id, "shots", summary=message)
-        db.commit()
-        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=message) from exc
-
-    db.execute(
-        update(Shot)
-        .where(Shot.project_id == project_id)
-        .where(Shot.is_current.is_(True))
-        .values(is_current=False)
-    )
-    update_task_progress(db, task, "正在保存分镜表", 90)
-    shots = [
-        Shot(
-            project_id=project_id,
-            script_id=script.id,
-            shot_batch_id=task.id,
-            is_current=True,
-            status="ready_for_review",
-            **item,
-        )
-        for item in shot_dicts
-    ]
-    db.add_all(shots)
-    db.flush()
-    bind_dialogues_to_shots(db, project_id, shots)
-    for shot in shots:
-        shot_dialogues = [
-            dialogue
-            for dialogue in dialogues
-            if dialogue.id in {str(item) for item in shot.dialogue_ids or []}
-        ]
-        card = dict(shot.shot_card or {})
-        card["prompt_fingerprint"] = _shot_prompt_fingerprint(
-            project=project,
-            shot=shot,
-            characters=characters,
-            scene=_selected_scene(scenes, shot.scene_id),
-            props=_selected_entities(props, shot.prop_ids),
-            dialogues=shot_dialogues,
-        )
-        card["prompt_stale"] = False
-        shot.shot_card = card
-        db.add(shot)
-    task.raw_response = {
-        "provider": response.raw_response,
-        "shot_count": len(shots),
-        "image_prompt_flow": "storyboard_first_frame_direct_v1",
-        "automatic_refiner_calls": 0,
-    }
-    mark_task_succeeded(
-        db,
-        task,
-        output_asset_ids=[],
-        result_payload={"shot_count": len(shots), "automatic_refiner_calls": 0},
-        raw_response=task.raw_response,
-        provider_task_id=response.provider_task_id,
-    )
-    mark_stage_ready(
-        db,
-        project_id,
-        "shots",
-        task_id=task.id,
-        summary=f"{len(shots)} 个视频片段方案已生成，可继续编辑",
-        metadata={"shot_count": len(shots), "image_prompt_flow": "direct"},
-    )
-    mark_downstream_stages_pending(db, project_id, "shots", summary="分镜已更新，需要重新生成图片和后续内容")
-    db.commit()
-    for item in [*shots, task]:
-        db.refresh(item)
-    return list_shots(db, project_id), task
-
-
-def _with_agent_prompt(system_prompt: str | None, prompt: str) -> str:
-    return prompt if not system_prompt else f"{system_prompt.strip()}\n\n任务输入：\n{prompt}"
-
+    return generate_shots_now(db, project_id)
 
 def create_shot(db: Session, project_id: str, payload: ShotCreate) -> Shot:
     project = get_project_or_404(db, project_id)
@@ -300,7 +105,7 @@ def create_shot(db: Session, project_id: str, payload: ShotCreate) -> Shot:
         for dialogue in list_dialogues(db, project_id)
         if dialogue.id in dialogue_ids
     ]
-    _apply_video_prompt_field(
+    apply_video_prompt_field(
         project=project,
         data=data,
         characters=characters,
@@ -320,12 +125,12 @@ def create_shot(db: Session, project_id: str, payload: ShotCreate) -> Shot:
     db.flush()
     bind_dialogues_to_shots(db, project_id, [shot])
     card = dict(shot.shot_card or {})
-    card["prompt_fingerprint"] = _shot_prompt_fingerprint(
+    card["prompt_fingerprint"] = shot_prompt_fingerprint(
         project=project,
         shot=shot,
         characters=characters,
-        scene=_selected_scene(scenes, shot.scene_id),
-        props=_selected_entities(props, shot.prop_ids),
+        scene=select_scene(scenes, shot.scene_id),
+        props=select_entities(props, shot.prop_ids),
         dialogues=selected_dialogues,
     )
     shot.shot_card = card
@@ -572,41 +377,6 @@ def _current_shot_batch_id(db: Session, project_id: str) -> str | None:
     return shot.shot_batch_id if shot else None
 
 
-def _apply_video_prompt_field(
-    *,
-    project: Project,
-    data: dict[str, Any],
-    characters: list[Character],
-    scenes: list[Scene],
-    props: list[Prop],
-    dialogues: list[Dialogue] | None = None,
-    reference_variant_keys: dict[str, str] | None = None,
-    reference_media_labels: dict[str, str] | None = None,
-    storyboard_media_label: str | None = None,
-) -> None:
-    data["video_prompt"] = build_shot_video_prompt(
-        description=str(data.get("description") or ""),
-        camera_shot=data.get("camera_shot"),
-        camera_movement=data.get("camera_movement"),
-        characters=_selected_entities(characters, data.get("character_ids")),
-        props=_selected_entities(props, data.get("prop_ids")),
-        dialogues=dialogues or [],
-        scene=_selected_scene(scenes, data.get("scene_id")),
-        shot_card=data.get("shot_card") if isinstance(data.get("shot_card"), dict) else {},
-        aspect_ratio=project.aspect_ratio,
-        resolution=project.resolution,
-        animation_style=resolve_visual_style(project.style, project.creative_settings),
-        reference_variant_keys=reference_variant_keys,
-        reference_media_labels=reference_media_labels,
-        storyboard_media_label=storyboard_media_label,
-    )
-    card = dict(data.get("shot_card") or {})
-    card["prompt_source"] = "compiled"
-    card["prompt_compiler_version"] = VIDEO_PROMPT_COMPILER_VERSION
-    card["prompt_stale"] = False
-    data["shot_card"] = card
-
-
 def preview_shot_video_prompt(db: Session, shot_id: str) -> dict[str, Any]:
     shot = get_shot_or_404(db, shot_id)
     project = get_project_or_404(db, shot.project_id)
@@ -629,7 +399,7 @@ def preview_shot_video_prompt(db: Session, shot_id: str) -> dict[str, Any]:
         if item["entity_id"] and item["media_label"]:
             reference_media_labels.setdefault(item["entity_id"], item["media_label"])
     data = _shot_to_dict(shot)
-    _apply_video_prompt_field(
+    apply_video_prompt_field(
         project=project,
         data=data,
         characters=characters,
@@ -641,12 +411,12 @@ def preview_shot_video_prompt(db: Session, shot_id: str) -> dict[str, Any]:
         storyboard_media_label=storyboard_media_label,
     )
     prompt = str(data["video_prompt"])
-    fingerprint = _shot_prompt_fingerprint(
+    fingerprint = shot_prompt_fingerprint(
         project=project,
         shot=shot,
         characters=characters,
-        scene=_selected_scene(scenes, shot.scene_id),
-        props=_selected_entities(props, shot.prop_ids),
+        scene=select_scene(scenes, shot.scene_id),
+        props=select_entities(props, shot.prop_ids),
         dialogues=dialogues,
     )
     return {
@@ -744,96 +514,6 @@ def _shot_prompt_reference_assets(db: Session, shot: Shot) -> list[dict[str, str
             }
         )
     return result
-
-
-def _shot_prompt_fingerprint(
-    *,
-    project: Project,
-    shot: Shot,
-    characters: list[Character],
-    scene: Scene | None,
-    props: list[Prop],
-    dialogues: list[Dialogue],
-) -> str:
-    payload = {
-        "prompt_compiler_version": VIDEO_PROMPT_COMPILER_VERSION,
-        "project": {
-            "aspect_ratio": project.aspect_ratio,
-            "resolution": project.resolution,
-            "style": project.style,
-            "creative_settings": project.creative_settings,
-        },
-        "shot": {
-            "id": shot.id,
-            "description": shot.description,
-            "camera_shot": shot.camera_shot,
-            "camera_movement": shot.camera_movement,
-            "shot_card": _prompt_source_card(shot.shot_card),
-            "dialogue_ids": shot.dialogue_ids,
-        },
-        "characters": [
-            {"id": item.id, "asset_spec": item.asset_spec}
-            for item in characters
-            if item.id in set(shot.character_ids or [])
-        ],
-        "scene": {"id": scene.id, "asset_spec": scene.asset_spec} if scene else None,
-        "props": [{"id": item.id, "asset_spec": item.asset_spec} for item in props],
-        "dialogues": [
-            {
-                "id": item.id,
-                "text": item.text,
-                "translation_zh": item.translation_zh,
-                "emotion": item.emotion,
-                "beat_id": item.beat_id,
-                "sound_cues": item.sound_cues,
-            }
-            for item in dialogues
-        ],
-    }
-    serialized = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=str)
-    return f"sha256:{hashlib.sha256(serialized.encode('utf-8')).hexdigest()}"
-
-
-def _prompt_source_card(value: object) -> dict[str, Any]:
-    card = dict(value) if isinstance(value, dict) else {}
-    for key in (
-        "prompt_fingerprint",
-        "prompt_stale",
-        "stale_reason",
-        "prompt_source",
-        "prompt_compiler_version",
-        "prompt_compiled_at",
-    ):
-        card.pop(key, None)
-    card["beats"] = _without_legacy_beat_timing(card.get("beats"))
-    if isinstance(card.get("motion_timing"), dict):
-        motion_timing = dict(card["motion_timing"])
-        motion_timing["beats"] = _without_legacy_beat_timing(motion_timing.get("beats"))
-        card["motion_timing"] = motion_timing
-    return card
-
-
-def _without_legacy_beat_timing(value: object) -> list[dict[str, Any]]:
-    if not isinstance(value, list):
-        return []
-    result: list[dict[str, Any]] = []
-    for item in value:
-        if not isinstance(item, dict):
-            continue
-        beat = dict(item)
-        for key in ("duration_sec", "time", "range", "at"):
-            beat.pop(key, None)
-        result.append(beat)
-    return result
-
-
-def _selected_entities(items: list[Any], selected_ids: Any) -> list[Any]:
-    wanted = {item for item in selected_ids or [] if isinstance(item, str)}
-    return [item for item in items if item.id in wanted]
-
-
-def _selected_scene(scenes: list[Scene], scene_id: Any) -> Scene | None:
-    return next((scene for scene in scenes if scene.id == scene_id), None)
 
 
 def build_fallback_shot_card(data: dict[str, Any]) -> dict[str, Any]:

@@ -2,6 +2,8 @@ import json
 import re
 from typing import Any
 
+from app.scripts.speaker_policy import strip_voice_only_scene_characters
+
 def parse_screenplay_response(text: str) -> dict[str, Any]:
     payload = _loads_json_object(text)
     legacy_content = _string_or_default(payload.get("content"), "")
@@ -92,7 +94,7 @@ def normalize_production_scenes(
         legacy_content=legacy_content,
         legacy_dialogues=legacy_dialogues,
     )
-    return scenes
+    return strip_voice_only_scene_characters(scenes)
 
 
 def render_readable_script(scenes: list[dict[str, Any]]) -> str:

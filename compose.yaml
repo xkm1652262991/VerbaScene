@@ -1,0 +1,101 @@
+name: verbascene
+
+services:
+  postgres:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: verbascene
+      POSTGRES_USER: verbascene
+      POSTGRES_PASSWORD: "${VERBASCENE_POSTGRES_PASSWORD:-verbascene-local}"
+    volumes:
+      - verbascene_postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U verbascene -d verbascene"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 5s
+
+  api:
+    image: verbascene-api:local
+    build:
+      context: .
+      dockerfile: docker/api.Dockerfile
+    init: true
+    restart: unless-stopped
+    env_file:
+      - path: .env.example
+        required: true
+      - path: .env
+        required: false
+    environment:
+      APP_ENV: docker
+      DEBUG: "false"
+      PERSISTENCE_MODE: database
+      DATABASE_URL: "postgresql+psycopg://verbascene:${VERBASCENE_POSTGRES_PASSWORD:-verbascene-local}@postgres:5432/verbascene"
+      DATABASE_SCHEMA: public
+      LOCAL_DATA_DIR: /workspace/storage/local
+      STORAGE_ROOT: /workspace/storage
+      PUBLIC_STORAGE_BASE_URL: /storage
+      PROVIDER_SECRET_FILE: /workspace/runtime/provider-secrets.json
+      REDIS_REQUIRED: "false"
+      CORS_ORIGINS: '["http://localhost:${VERBASCENE_WEB_PORT:-5173}","http://127.0.0.1:${VERBASCENE_WEB_PORT:-5173}"]'
+    volumes:
+      - type: bind
+        source: ./storage
+        target: /workspace/storage
+      - type: bind
+        source: ./apps/api/.runtime
+        target: /workspace/runtime
+    ports:
+      - "${VERBASCENE_BIND_ADDRESS:-127.0.0.1}:${VERBASCENE_API_PORT:-8000}:8000"
+    extra_hosts:
+      - host.docker.internal:host-gateway
+    depends_on:
+      postgres:
+        condition: service_healthy
+    command:
+      - /bin/sh
+      - -c
+      - >-
+        alembic upgrade head &&
+        exec python -m uvicorn app.main:app --host 0.0.0.0 --port 8000
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - >-
+          import json, urllib.request;
+          payload = json.load(urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=4));
+          assert payload['status'] == 'ok'
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+    stop_grace_period: 40s
+
+  web:
+    image: verbascene-web:local
+    build:
+      context: .
+      dockerfile: docker/web.Dockerfile
+      args:
+        VITE_API_BASE_URL: ""
+    init: true
+    restart: unless-stopped
+    depends_on:
+      api:
+        condition: service_healthy
+    ports:
+      - "${VERBASCENE_BIND_ADDRESS:-127.0.0.1}:${VERBASCENE_WEB_PORT:-5173}:80"
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--spider", "http://127.0.0.1/"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+      start_period: 5s
+
+volumes:
+  verbascene_postgres_data:

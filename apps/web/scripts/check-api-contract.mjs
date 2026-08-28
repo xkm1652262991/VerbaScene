@@ -39,6 +39,7 @@ const requiredOperations = [
   ["post", "/api/assets/{asset_id}/extract-frame"],
   ["delete", "/api/assets/{asset_id}"],
   ["get", "/api/projects/{project_id}/shots"],
+  ["post", "/api/projects/{project_id}/shots/generate"],
   ["post", "/api/projects/{project_id}/shots"],
   ["patch", "/api/shots/{shot_id}"],
   ["put", "/api/shots/{shot_id}/reference-assets"],
@@ -78,6 +79,7 @@ const errors = [];
 
 const taskSubmissionPaths = [
   "/api/projects/{project_id}/script/generate",
+  "/api/projects/{project_id}/shots/generate",
   "/api/shots/{shot_id}/video/generate-candidate",
   "/api/projects/{project_id}/shot-videos/generate-candidates",
   "/api/assets/{asset_id}/regenerate-video-candidate",
@@ -86,7 +88,7 @@ const taskSubmissionPaths = [
 ];
 
 const idempotentGenerationPaths = [
-  ...taskSubmissionPaths.slice(0, 4),
+  ...taskSubmissionPaths.slice(0, 5),
   "/api/asset-candidates/{candidate_id}/regenerate",
 ];
 const requiredTaskFields = [

@@ -7,6 +7,10 @@ from app.production.contracts import (
     MANUALLY_RETRYABLE_VIDEO_TASK_TYPES,
     VIDEO_CANDIDATE_TASK_TYPE,
 )
+from app.production.shot_direction.contracts import (
+    MANUALLY_RETRYABLE_SHOT_DIRECTION_TASK_TYPES,
+    SHOT_DIRECTION_TASK_TYPE,
+)
 from app.scripts.contracts import (
     MANUALLY_RETRYABLE_SCRIPT_TASK_TYPES,
     SCRIPT_GENERATION_TASK_TYPE,
@@ -18,6 +22,7 @@ from app.services.workflow_state_service import mark_stage_running
 MANUALLY_RETRYABLE_TASK_TYPES = (
     MANUALLY_RETRYABLE_SCRIPT_TASK_TYPES
     | MANUALLY_RETRYABLE_VIDEO_TASK_TYPES
+    | MANUALLY_RETRYABLE_SHOT_DIRECTION_TASK_TYPES
 )
 
 
@@ -44,6 +49,16 @@ def request_task_cancel(db: Session, task: GenerationTask) -> GenerationTask:
                 task_id=task.id,
                 error_code="video_task_cancelled",
                 error_message="视频任务已取消",
+            )
+        elif task.task_type == SHOT_DIRECTION_TASK_TYPE:
+            finish_latest_stage_run(
+                db,
+                task.project_id,
+                "production",
+                status="cancelled",
+                task_id=task.id,
+                error_code="shot_direction_cancelled",
+                error_message="分镜导演任务已取消",
             )
     return task
 

@@ -25,7 +25,7 @@ POST /api/projects/{project_id}/entities/generate
 POST /api/projects/{project_id}/reference-images/generate-candidate
 POST /api/asset-candidates/{candidate_id}/promote
 POST /api/assets/{asset_id}/select
-POST /api/projects/{project_id}/shots/generate
+POST /api/projects/{project_id}/shots/generate  -> 202 GenerationTask
 PATCH /api/shots/{shot_id}
 PUT   /api/shots/{shot_id}/reference-assets
 GET   /api/shots/{shot_id}/video-prompt-preview
@@ -41,17 +41,19 @@ POST  /api/assets/{asset_id}/regenerate-video-candidate
 `PUT /api/shots/{shot_id}/reference-assets` 接收按优先级排列的 `asset_ids`。服务只接受同项目、已经采用且可用的角色/场景/道具图片；当前采用版本和状态为 `approved` 的历史版本都可以精确绑定，未采用候选不可绑定；最多一个场景。绑定结果写入 `shot_card.reference_asset_ids`，同时同步 `scene_id`、`character_ids` 和 `prop_ids`，并仅把最终 Prompt 标记为可能过期。该绑定同时服务首帧和视频：首帧生成可以消费道具引用，视频生成会过滤道具图。
 
 视频 Prompt 预览除 `reference_tokens` 外返回结构化 `reference_assets`，内容必须与
-Provider 实际 `content` 顺序一致。默认最多包含 2 个角色和 1 个场景；只有
+Provider 实际 `content` 顺序一致。应用层最多包含 20 个角色和 1 个场景，Provider 可以按自身合同执行更严格的上限；只有
 `PATCH /api/shots/{shot_id}/video-reference` 明确设置 `asset_id` 时才增加片段首帧，
 此时首帧为“图片1”。每项包含资产 ID、显示 token、Seedance 素材序号 `media_label`、实体
 类型、实体 ID、状态变体、引用角色和 URI。道具不出现在视频预览引用中。Provider
 解析优先使用显式绑定的精确资产版本；旧片段没有显式绑定时继续按实体关系和当前
-采用版本自动解析，但仍遵守相同数量上限。
+采用版本自动解析，但仍遵守应用层和当前 Provider 中更严格的数量上限。
 
 批量参考图生成默认只处理角色和场景。单独的道具图不属于标准生产链路；道具实体及
 其状态仍保存在剧本和片段数据中。
 
-分镜生成只负责语义分段和内部镜头节拍，不要求 LLM 预测 Shot 或 beat 的秒数。每个 Shot 在 `shot_card.beats` 中包含有序的内部镜头，`shot_card.segment_plan.duration_mode` 默认为 `provider_auto`。历史数据里的 `beats[].duration_sec` 继续可读，但不参与 Prompt 编译或片段时长计算。
+分镜生成是使用 `resource_key=project:{project_id}:shots` 的持久化后台任务，支持 `Idempotency-Key`、取消和人工重试。任务冻结剧本、Dialogue、实体设定、采用资产元数据与制作规则，执行资产观察、草案、Reflection 和最多一次定点 Patch；成功后原子切换当前 Shot 批次，失败或取消不影响原批次。`result_payload.director_report` 是前端报告合同，Provider 原始响应不属于公共界面合同。
+
+分镜导演只负责语义分段、内部镜头节拍和创意性的分镜图主体 Prompt，不要求 LLM 预测 Shot 或 beat 的秒数，也不选择最终媒体版本或提交视频。每个 Shot 在 `shot_card.beats` 中包含有序的内部镜头，`shot_card.segment_plan.duration_mode` 默认为 `provider_auto`。历史数据里的 `beats[].duration_sec` 继续可读，但不参与 Prompt 编译或片段时长计算。
 
 `POST /api/shots/{shot_id}/video/generate-candidate` 返回 `202 + GenerationTask`，并支持 `duration_mode=provider_auto|fixed`。Seedance 2.0 默认使用 `provider_auto`，Adapter 向 Provider 发送 `duration=-1`；返回的真实时长在候选版本被采用后写入现有的 `Shot.duration_sec` 和 `segment_plan.actual_duration_sec`，供时间线、计费展示与合成使用。`fixed` 只是人工高级覆盖，必须同时提交 `duration_sec`。兼容旧客户端时，只提交 `duration_sec` 视为 `fixed`。
 
