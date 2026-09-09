@@ -5,6 +5,7 @@ import tempfile
 import unittest
 
 from app.platform.media.store import LocalMediaStore
+from app.agents.shot_breakdown import segment_planning_contract
 from app.production.shot_direction.asset_inspector import MetadataAssetInspector
 from app.production.shot_direction.contracts import (
     ShotDirectionInput,
@@ -41,14 +42,7 @@ class ShotDirectionContractTests(unittest.TestCase):
             scenes=[{"id": "scene-1", "name": "活动室", "asset_spec": {}}],
             props=[{"id": "prop-1", "name": "积木", "asset_spec": {}}],
             adopted_assets=assets or [],
-            segment_contract={
-                "target_duration_sec": target_duration_sec,
-                "min_segment_count": 2 if target_duration_sec == 24 else 1,
-                "preferred_segment_count": 2 if target_duration_sec == 24 else 1,
-                "max_segment_count": 3 if target_duration_sec == 24 else 2,
-                "min_internal_shots": 2,
-                "max_internal_shots": 4,
-            },
+            segment_contract=segment_planning_contract(target_duration_sec),
         )
 
     def _shot(self, shot_no: int, *, dialogue_ids=None, description=None):
@@ -58,6 +52,7 @@ class ShotDirectionContractTests(unittest.TestCase):
             "description": description or f"片段 {shot_no} 推进收拾动作。",
             "camera_shot": "中景",
             "camera_movement": "固定机位",
+            "duration_sec": 12,
             "scene_id": "scene-1",
             "character_ids": ["character-1"],
             "prop_ids": ["prop-1"],
@@ -69,6 +64,7 @@ class ShotDirectionContractTests(unittest.TestCase):
                 "source_scene_no": 1,
                 "story_purpose": "推进合作",
                 "emotional_intent": "友好",
+                "duration_rationale": "完整承载发现积木和开始收拾的连续事件。",
                 "camera": {"shot_size": "中景", "angle": "平视", "movement": "固定机位"},
                 "action": {
                     "start_state": "积木散落。",

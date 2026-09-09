@@ -27,7 +27,7 @@ class DirectShotImagePromptTests(unittest.TestCase):
                     "description": "Mia发现饼干罐空了",
                     "camera_shot": "中景",
                     "camera_movement": "固定机位",
-                    "duration_sec": 2.5,
+                    "duration_sec": 11,
                     "scene_id": "kitchen",
                     "character_ids": ["mia"],
                     "prop_ids": ["jar"],
@@ -38,6 +38,7 @@ class DirectShotImagePromptTests(unittest.TestCase):
                         "source_scene_no": 1,
                         "story_purpose": "揭示饼干消失",
                         "emotional_intent": "惊讶",
+                        "duration_rationale": "需要完整展示接近、开罐和惊讶反应。",
                         "camera": {"shot_size": "中景", "angle": "平视机位", "movement": "固定机位"},
                         "action": {
                             "start_state": "Mia双手握住罐盖",
@@ -88,14 +89,15 @@ class DirectShotImagePromptTests(unittest.TestCase):
         self.assertIn("image_prompts 只能包含 shot_storyboard", prompt)
         self.assertIn("visible_character_ids", prompt)
         self.assertIn("一个 shot 是一次视频模型调用，不是单个摄影镜头", prompt)
-        self.assertIn("不得输出、猜测或分配任何 shot 或 beat 的秒数", prompt)
+        self.assertIn("为每个 shot 分配一个总时长", prompt)
+        self.assertIn("不得先计算平均秒数再机械切片", prompt)
         self.assertIn("普通景别变化、机位变化、对话轮次、动作与反应不得单独创建 2-3 秒 shot", prompt)
         self.assertIn("不输出 duration_sec、时间区间、时间戳或“第几秒”", prompt)
         self.assertIn("不得包含时长依据或时间点", prompt)
         self.assertIn("每个 beat 只使用一种主要运镜", prompt)
         self.assertIn("动作幅度/速度/力度", prompt)
         self.assertIn("抽象情绪必须外化", prompt)
-        self.assertIn("优选生成 8 个视频片段", prompt)
+        self.assertIn("实际数量由剧情事件决定，不存在优选平均片段数", prompt)
         self.assertNotIn("Prompt Compiler", prompt)
 
     def test_segment_contract_rejects_short_cards_and_accepts_multi_shot_segment(self):
@@ -150,12 +152,13 @@ class DirectShotImagePromptTests(unittest.TestCase):
             segment_contract=contract,
         )
 
-        self.assertIsNone(shots[0]["duration_sec"])
+        self.assertEqual(shots[0]["duration_sec"], 11)
         self.assertEqual(len(shots), 8)
         self.assertEqual(
             shots[0]["shot_card"]["segment_plan"]["duration_mode"],
-            "provider_auto",
+            "fixed",
         )
+        self.assertEqual(shots[0]["shot_card"]["segment_plan"]["planned_duration_sec"], 11)
         self.assertEqual(shots[0]["shot_card"]["segment_plan"]["internal_shot_count"], 3)
 
     def test_parser_keeps_detailed_prompt_spaces_and_structured_entities(self):
@@ -194,6 +197,50 @@ class DirectShotImagePromptTests(unittest.TestCase):
         )
 
         self.assertEqual(shots[0]["image_prompts"]["shot_storyboard"]["visible_prop_ids"], [])
+
+    def test_parser_strips_internal_timestamps_but_keeps_ordered_actions(self):
+        payload = self._payload()
+        payload["shots"][0]["shot_card"]["beats"] = [
+            {
+                "beat_id": "beat-1",
+                "camera": "0.0-2.0秒，全景建立空间",
+                "action": "0.0-2.0秒，Mia先打开罐盖；2.0秒后低头查看空罐。",
+                "dialogue_ids": [],
+                "sound_cues": [],
+            }
+        ]
+
+        shot = parse_shot_breakdown_response(
+            text=json.dumps(payload, ensure_ascii=False),
+            characters=[self.rabbit],
+            scenes=[self.scene],
+            props=[self.jar],
+        )[0]
+
+        beat = shot["shot_card"]["beats"][0]
+        self.assertEqual(beat["camera"], "全景建立空间")
+        self.assertEqual(beat["action"], "Mia先打开罐盖；低头查看空罐。")
+
+    def test_segment_contract_rejects_total_duration_outside_project_budget(self):
+        payload = self._payload()
+        payload["shots"][0]["shot_card"]["beats"] = [
+            {"beat_id": "beat-1", "camera": "全景", "action": "Mia靠近罐子", "dialogue_ids": [], "sound_cues": []},
+            {"beat_id": "beat-2", "camera": "近景", "action": "Mia打开罐子", "dialogue_ids": [], "sound_cues": []},
+        ]
+        payload["shots"][0]["duration_sec"] = 4
+        payload["shots"] = [
+            {**deepcopy(payload["shots"][0]), "shot_no": index + 1}
+            for index in range(8)
+        ]
+
+        with self.assertRaisesRegex(ValueError, "规划总时长 32 秒"):
+            parse_shot_breakdown_response(
+                text=json.dumps(payload, ensure_ascii=False),
+                characters=[self.rabbit],
+                scenes=[self.scene],
+                props=[self.jar],
+                segment_contract=segment_planning_contract(90),
+            )
 
     def test_parser_fills_optional_shot_fields_without_extra_frame_prompts(self):
         payload = {

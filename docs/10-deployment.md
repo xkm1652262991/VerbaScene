@@ -89,16 +89,45 @@ PERSISTENCE_MODE=database .venv/bin/alembic upgrade head
 持久化部署形态。
 
 ```env
+SCRIPT_GENERATION_CONCURRENCY=2
 IMAGE_GENERATION_CONCURRENCY=2
 VIDEO_GENERATION_CONCURRENCY=2
+LLM_STREAM_PROGRESS_INTERVAL_SEC=2
 TASK_POLL_INTERVAL_SEC=0.5
 TASK_LEASE_SEC=60
 TASK_HEARTBEAT_SEC=15
 TASK_SHUTDOWN_TIMEOUT_SEC=30
 ```
 
-图片与视频通道并发都被运行时限制为最多 2；剧本文本通道和本地媒体通道分别固定为 1。
+剧本与分镜共用文本通道，默认并发为 2、上限为 4；图片与视频通道并发最多为 2。
+当 LLM Provider 支持 OpenAI-compatible SSE 时，文本任务每隔约
+`LLM_STREAM_PROGRESS_INTERVAL_SEC` 秒持久化一次分片进度。
 本地媒体通道同时承载视频截帧与成片导出，避免多个 FFmpeg 进程争抢机器资源。
+成片容器同时安装 Noto Sans CJK，用于 Pillow 渲染中英双语字幕。自定义部署可指定：
+
+```env
+SUBTITLE_FONT_PATH=/absolute/path/to/NotoSansCJK-Regular.ttc
+```
+
+该路径必须在 API 进程或容器内可读，并覆盖字幕实际使用的字形。
+
+成片字幕可选接入 OpenAI-compatible ASR。关闭时完全使用确定性时间轴；开启后 ASR 失败会
+按 Dialogue 粒度回退，不阻断 FFmpeg 导出：
+
+```env
+ASR_PROVIDER=openai_compatible
+ASR_API_KEY=
+ASR_BASE_URL=http://asr-gateway.example/v1
+ASR_MODEL=qwen3-asr
+ASR_RESPONSE_FORMAT=auto
+ASR_TIMEOUT_SEC=300
+ASR_MIN_MATCH_SCORE=0.55
+```
+
+网关必须允许该 Key 访问 `ASR_MODEL`。word 或 segment 时间戳会被直接使用；只支持普通 JSON
+纯文本时，系统通过 FFmpeg VAD 后逐段识别来建立近似词窗。已知网关只支持纯文本时应设置
+`ASR_RESPONSE_FORMAT=json`，避免每次导出先探测一次不支持的 `verbose_json`；默认 `auto` 会探测并
+在明确的 400 响应后降级。`ASR_PROVIDER=disabled` 为默认关闭状态。
 
 当前部署目标是单 API 进程。不应仅因 PostgreSQL 中有租约字段就宣称多实例生产就绪。
 

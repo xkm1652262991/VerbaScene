@@ -13,6 +13,11 @@ from sqlalchemy.orm import Session, sessionmaker
 from app.core.config import settings
 from app.db import SessionLocal
 from app.models import GenerationTask
+from app.platform.tasks.lease import (
+    TaskLeaseLostError,
+    acquire_task_lease_fence,
+    task_execution_lease,
+)
 from app.platform.tasks.repository import TaskRepository
 from app.platform.tasks.types import (
     SubmissionState,
@@ -38,6 +43,7 @@ class LocalTaskRuntime:
         poll_interval_sec: float = 0.5,
         lease_seconds: int = 60,
         heartbeat_seconds: int = 15,
+        script_concurrency: int = 1,
         image_concurrency: int = 2,
         video_concurrency: int = 2,
     ) -> None:
@@ -46,6 +52,7 @@ class LocalTaskRuntime:
         self.poll_interval_sec = max(0.05, poll_interval_sec)
         self.lease_seconds = max(2, lease_seconds)
         self.heartbeat_seconds = max(1, min(heartbeat_seconds, self.lease_seconds // 2))
+        self.script_concurrency = max(1, min(script_concurrency, 4))
         self.image_concurrency = max(1, min(image_concurrency, 2))
         self.video_concurrency = max(1, min(video_concurrency, 2))
         self.runtime_id = f"{socket.gethostname()}:{uuid4().hex[:12]}"
@@ -56,7 +63,7 @@ class LocalTaskRuntime:
         self._stop_event = Event()
         self._wake_event = Event()
         self._threads: list[Thread] = []
-        self._active: dict[int, tuple[str, str]] = {}
+        self._active: dict[int, tuple[str, str, str]] = {}
 
     def register(self, handler: TaskHandler) -> None:
         with self._lock:
@@ -85,7 +92,7 @@ class LocalTaskRuntime:
             self._started = True
             self._stop_event.clear()
             workers = [
-                (TaskLane.SCRIPT, 1),
+                (TaskLane.SCRIPT, self.script_concurrency),
                 (TaskLane.IMAGE, self.image_concurrency),
                 (TaskLane.VIDEO, self.video_concurrency),
                 (TaskLane.MEDIA, 1),
@@ -142,6 +149,7 @@ class LocalTaskRuntime:
         )
         while not self._stop_event.is_set():
             task_id: str | None = None
+            lease_token: str | None = None
             try:
                 with self.session_factory() as db:
                     task = self.repository.claim_next(
@@ -152,24 +160,29 @@ class LocalTaskRuntime:
                     )
                     db.commit()
                     task_id = task.id if task else None
+                    lease_token = str(task.lease_token) if task else None
                 if task_id is None:
                     self._wake_event.wait(self.poll_interval_sec)
                     self._wake_event.clear()
                     continue
                 with self._lock:
-                    self._active[current_thread().ident or 0] = (task_id, owner)
-                self._execute_claimed(task_id, owner)
+                    self._active[current_thread().ident or 0] = (
+                        task_id,
+                        owner,
+                        str(lease_token),
+                    )
+                self._execute_claimed(task_id, owner, str(lease_token))
             except Exception:
                 logger.exception("Task worker %s failed while claiming/executing %s", owner, task_id)
             finally:
                 with self._lock:
                     self._active.pop(current_thread().ident or 0, None)
 
-    def _execute_claimed(self, task_id: str, owner: str) -> None:
+    def _execute_claimed(self, task_id: str, owner: str, lease_token: str) -> None:
         heartbeat_stop = Event()
         heartbeat = Thread(
             target=self._heartbeat_loop,
-            args=(task_id, owner, heartbeat_stop),
+            args=(task_id, owner, lease_token, heartbeat_stop),
             name=f"task-heartbeat-{task_id[:8]}",
             daemon=True,
         )
@@ -182,13 +195,22 @@ class LocalTaskRuntime:
             if task is None or handler is None:
                 raise TaskExecutionError("task_handler_missing", "Task handler is not registered")
             if cancelling:
-                handler.cancel(task_id)
-                self._finish_cancelled(task_id, owner)
+                with task_execution_lease(task_id, owner, lease_token):
+                    handler.cancel(task_id)
+                self._finish_cancelled(task_id, owner, lease_token)
                 return
-            handler.execute(task_id)
-            self._normalize_handler_checkpoint(task_id, owner)
+            with task_execution_lease(task_id, owner, lease_token):
+                handler.execute(task_id)
+            self._normalize_handler_checkpoint(task_id, owner, lease_token)
+        except TaskLeaseLostError:
+            logger.info("Rejected stale worker write for task %s", task_id)
         except TaskExecutionError as exc:
-            self._handle_execution_error(task_id, owner, exc)
+            self._handle_execution_error(
+                task_id,
+                owner,
+                exc,
+                lease_token=lease_token,
+            )
         except Exception as exc:
             self._handle_execution_error(
                 task_id,
@@ -199,13 +221,19 @@ class LocalTaskRuntime:
                     retryable=False,
                     submission_state=SubmissionState.UNKNOWN,
                 ),
+                lease_token=lease_token,
             )
             logger.exception("Task handler failed for %s", task_id)
         finally:
             heartbeat_stop.set()
             heartbeat.join(min(1.0, self.heartbeat_seconds))
 
-    def _normalize_handler_checkpoint(self, task_id: str, owner: str) -> None:
+    def _normalize_handler_checkpoint(
+        self,
+        task_id: str,
+        owner: str,
+        lease_token: str | None = None,
+    ) -> None:
         with self.session_factory() as db:
             task = db.get(GenerationTask, task_id)
             if task is None:
@@ -216,22 +244,34 @@ class LocalTaskRuntime:
                     task,
                     status=TaskStatus.CANCELLED,
                     progress_label="任务已取消",
+                    owner=owner,
+                    lease_token=lease_token,
                 )
             elif task.status in TERMINAL_TASK_STATUSES:
-                task.active_dedupe_key = None
-                task.lease_owner = None
-                task.lease_expires_at = None
-                db.add(task)
-                db.flush()
+                pass
             else:
-                self.repository.release_lease(db, task_id=task_id, owner=owner)
+                self.repository.release_lease(
+                    db,
+                    task_id=task_id,
+                    owner=owner,
+                    lease_token=lease_token,
+                )
             db.commit()
         self.wake()
 
-    def _handle_execution_error(self, task_id: str, owner: str, exc: TaskExecutionError) -> None:
+    def _handle_execution_error(
+        self,
+        task_id: str,
+        owner: str,
+        exc: TaskExecutionError,
+        *,
+        lease_token: str | None = None,
+    ) -> None:
         with self.session_factory() as db:
             task = db.get(GenerationTask, task_id)
             if task is None or task.status in TERMINAL_TASK_STATUSES:
+                return
+            if not self._acquire_runtime_lease(db, task, owner, lease_token):
                 return
             if task.cancel_requested_at is not None or task.status == TaskStatus.CANCELLING.value:
                 self.repository.finish(
@@ -239,6 +279,8 @@ class LocalTaskRuntime:
                     task,
                     status=TaskStatus.CANCELLED,
                     progress_label="任务已取消",
+                    owner=owner,
+                    lease_token=lease_token,
                 )
             elif (
                 exc.retryable
@@ -252,6 +294,7 @@ class LocalTaskRuntime:
                 task.error_message = exc.message
                 task.raw_response = exc.raw_response
                 task.lease_owner = None
+                task.lease_token = None
                 task.lease_expires_at = None
                 db.add(task)
                 db.flush()
@@ -269,11 +312,18 @@ class LocalTaskRuntime:
                     error_code=error_code,
                     error_message=exc.message,
                     raw_response=exc.raw_response,
+                    owner=owner,
+                    lease_token=lease_token,
                 )
             db.commit()
         self.wake()
 
-    def _finish_cancelled(self, task_id: str, owner: str) -> None:
+    def _finish_cancelled(
+        self,
+        task_id: str,
+        owner: str,
+        lease_token: str | None = None,
+    ) -> None:
         with self.session_factory() as db:
             task = db.get(GenerationTask, task_id)
             if task is not None and task.status not in TERMINAL_TASK_STATUSES:
@@ -282,13 +332,26 @@ class LocalTaskRuntime:
                     task,
                     status=TaskStatus.CANCELLED,
                     progress_label="任务已取消",
+                    owner=owner,
+                    lease_token=lease_token,
                 )
             elif task is not None:
-                self.repository.release_lease(db, task_id=task_id, owner=owner)
+                self.repository.release_lease(
+                    db,
+                    task_id=task_id,
+                    owner=owner,
+                    lease_token=lease_token,
+                )
             db.commit()
         self.wake()
 
-    def _heartbeat_loop(self, task_id: str, owner: str, stop: Event) -> None:
+    def _heartbeat_loop(
+        self,
+        task_id: str,
+        owner: str,
+        lease_token: str,
+        stop: Event,
+    ) -> None:
         while not stop.wait(self.heartbeat_seconds):
             try:
                 with self.session_factory() as db:
@@ -296,6 +359,7 @@ class LocalTaskRuntime:
                         db,
                         task_id=task_id,
                         owner=owner,
+                        lease_token=lease_token,
                         lease_seconds=self.lease_seconds,
                     )
                     db.commit()
@@ -332,13 +396,37 @@ class LocalTaskRuntime:
     def _release_unfinished_leases(self) -> None:
         with self._lock:
             active = list(self._active.values())
-        for task_id, owner in active:
+        for task_id, owner, lease_token in active:
             try:
                 with self.session_factory() as db:
-                    self.repository.release_lease(db, task_id=task_id, owner=owner)
+                    self.repository.release_lease(
+                        db,
+                        task_id=task_id,
+                        owner=owner,
+                        lease_token=lease_token,
+                    )
                     db.commit()
             except Exception:
                 logger.exception("Failed to release task lease during shutdown: %s", task_id)
+
+    @staticmethod
+    def _acquire_runtime_lease(
+        db: Session,
+        task: GenerationTask,
+        owner: str,
+        lease_token: str | None,
+    ) -> bool:
+        expected_token = lease_token or task.lease_token
+        if expected_token:
+            return acquire_task_lease_fence(
+                db,
+                task_id=task.id,
+                owner=owner,
+                token=expected_token,
+            )
+        # Compatibility for pre-fencing rows constructed directly in tests or
+        # awaiting their first post-migration claim.
+        return task.lease_token is None and task.lease_owner in {None, owner}
 
 
 _runtime: LocalTaskRuntime | None = None
@@ -354,6 +442,7 @@ def get_task_runtime() -> LocalTaskRuntime:
                 poll_interval_sec=settings.task_poll_interval_sec,
                 lease_seconds=settings.task_lease_sec,
                 heartbeat_seconds=settings.task_heartbeat_sec,
+                script_concurrency=settings.script_generation_concurrency,
                 image_concurrency=settings.image_generation_concurrency,
                 video_concurrency=settings.video_generation_concurrency,
             )

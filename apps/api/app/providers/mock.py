@@ -478,6 +478,7 @@ def _mock_shot_breakdown(prompt: str) -> str:
                         "source_scene_no": 1,
                         "story_purpose": "练习简单请求和肯定回应。",
                         "emotional_intent": "友好合作",
+                        "duration_rationale": "完整承载发现问题、提出请求和合作完成三个连续剧情事件。",
                         "camera": {
                             "shot_size": "中景",
                             "angle": "平视",
@@ -536,16 +537,23 @@ def _mock_shot_breakdown(prompt: str) -> str:
                 }
             ]
     }
-    preferred_match = re.search(r"优选生成\s+(\d+)\s+个视频片段", prompt)
-    segment_count = max(1, int(preferred_match.group(1))) if preferred_match else 1
-    segment_duration = 12.0
+    count_match = re.search(r"片段数量的硬范围为\s*(\d+)\s*-\s*(\d+)\s*个", prompt)
+    if count_match:
+        minimum_count = max(1, int(count_match.group(1)))
+        maximum_count = max(minimum_count, int(count_match.group(2)))
+        segment_count = min(maximum_count, minimum_count + 2)
+    else:
+        segment_count = 1
+    target_match = re.search(r"项目目标总时长约\s*(\d+(?:\.\d+)?)\s*秒", prompt)
+    target_duration = int(round(float(target_match.group(1)))) if target_match else 12
+    segment_durations = _mock_event_duration_budget(target_duration, segment_count)
     template = payload["shots"][0]
     shots: list[dict] = []
     for index in range(segment_count):
         shot = deepcopy(template)
         shot["shot_no"] = index + 1
         shot["description"] = f"第 {index + 1} 个连续片段：Mia和朋友一起把散落的积木放进玩具盒。"
-        shot["duration_sec"] = segment_duration
+        shot["duration_sec"] = segment_durations[index]
         if index > 0:
             shot["dialogue_ids"] = []
             for beat in shot["shot_card"]["beats"]:
@@ -553,6 +561,25 @@ def _mock_shot_breakdown(prompt: str) -> str:
         shots.append(shot)
     payload["shots"] = shots
     return json.dumps(payload, ensure_ascii=False)
+
+
+def _mock_event_duration_budget(target_duration: int, segment_count: int) -> list[int]:
+    durations = [4 for _ in range(segment_count)]
+    remaining = max(0, target_duration - sum(durations))
+    event_order = [1, 3, 0, 2, 5, 4, 7, 6]
+    while remaining:
+        changed = False
+        for index in event_order:
+            if index >= segment_count or durations[index] >= 15:
+                continue
+            durations[index] += 1
+            remaining -= 1
+            changed = True
+            if not remaining:
+                break
+        if not changed:
+            break
+    return durations
 
 
 def _mock_storyboard_reflection() -> str:

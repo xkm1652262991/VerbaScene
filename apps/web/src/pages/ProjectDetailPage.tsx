@@ -11,6 +11,8 @@ import {
   cancelProjectStageRun,
   composeProject,
   createProjectShot,
+  deleteAsset,
+  deleteAssetCandidate,
   deleteShot,
   extractVideoFrameCandidate,
   generateProjectEntities,
@@ -641,6 +643,16 @@ export function ProjectDetailPage({ initialShotId, initialWorkspace, projectId }
               if (success && nextShot) commitShotSelection(nextShot.id);
             });
           }}
+          onDeleteAsset={(asset) => run(
+            `删除${asset.asset_type === "video" ? "视频" : "首帧"}版本`,
+            () => deleteAsset(asset.id),
+            `${asset.asset_type === "video" ? "视频" : "首帧"} v${asset.version} 已删除。`,
+          )}
+          onDeleteCandidate={(candidate) => run(
+            `删除${candidate.asset_type === "video" ? "视频" : "首帧"}候选`,
+            () => deleteAssetCandidate(candidate.id),
+            `${candidate.asset_type === "video" ? "视频" : "首帧"}候选 v${candidate.version} 已删除。`,
+          )}
           onGenerateImage={() => selectedShot && submitTask(
             "提交片段首帧候选",
             () => generateSingleShotImageCandidate(

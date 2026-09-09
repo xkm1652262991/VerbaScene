@@ -216,7 +216,11 @@ def execute_shot_direction_task(db: Session, task_id: str) -> tuple[list[Shot], 
         task.provider_task_id = _last_provider_task_id(value)
         update_task_progress(db, task, label, progress)
         if task.cancel_requested_at is not None or task.status == "cancelling":
-            if isinstance(value.get("inflight_phase"), dict):
+            inflight = value.get("inflight_phase")
+            if (
+                isinstance(inflight, dict)
+                and inflight.get("submission_state") == SubmissionState.NOT_SUBMITTED.value
+            ):
                 task.raw_response = previous_raw_response
                 db.add(task)
                 db.commit()
@@ -363,6 +367,7 @@ def execute_shot_direction_task(db: Session, task_id: str) -> tuple[list[Shot], 
     result_payload = {
         "shot_ids": [shot.id for shot in shots],
         "shot_count": len(shots),
+        "planned_duration_sec": sum(float(shot.duration_sec or 0) for shot in shots),
         "shot_batch_id": task.id,
         "pipeline_version": SHOT_DIRECTION_PIPELINE_VERSION,
         "quality_gate": pipeline_result.quality_gate,

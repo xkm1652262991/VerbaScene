@@ -214,10 +214,15 @@ class AnimationEnglishWorkflowTests(unittest.TestCase):
             self.assertTrue(scenes)
             self.assertTrue(props)
             self.assertEqual(len(shots), 8)
-            self.assertIsNone(shots[0].duration_sec)
+            self.assertEqual(sum(float(shot.duration_sec or 0) for shot in shots), 90)
+            self.assertTrue(all(shot.duration_sec is not None for shot in shots))
             self.assertEqual(
                 shots[0].shot_card["segment_plan"]["duration_mode"],
-                "provider_auto",
+                "fixed",
+            )
+            self.assertEqual(
+                float(shots[0].shot_card["segment_plan"]["planned_duration_sec"]),
+                float(shots[0].duration_sec),
             )
             self.assertTrue(
                 all("duration_sec" not in beat for beat in shots[0].shot_card["beats"])

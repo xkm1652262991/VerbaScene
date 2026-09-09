@@ -12,7 +12,6 @@ from typing import Any
 from uuid import uuid4
 
 from fastapi import HTTPException, status
-from PIL import Image
 from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 
@@ -38,6 +37,7 @@ from app.models import (
 )
 from app.providers.defaults import provider_registry
 from app.providers.types import ProviderRequest, ProviderResponse, ProviderStatus, ProviderType
+from app.services.artifact_idempotency import artifact_completion_key
 from app.services.asset_resolver_service import AssetResolution, resolve_generation_assets
 from app.services.asset_repository import (
     asset_source_context,
@@ -62,7 +62,13 @@ from app.services.media_generation_support import (
     with_avd_asset_usage,
 )
 from app.services.media_storage_service import materialize_data_uri
-from app.services.task_service import mark_task_failed, mark_task_succeeded, update_task_progress
+from app.services.task_service import (
+    TaskCompletionConflictError,
+    begin_task_completion,
+    mark_task_failed,
+    mark_task_succeeded,
+    update_task_progress,
+)
 from app.services.workflow_state_service import (
     mark_downstream_stages_pending,
     mark_stage_failed,
@@ -1445,6 +1451,14 @@ def persist_image_candidate_task_result(
     response: ProviderResponse,
 ) -> AssetCandidate:
     """Persist one Provider result and complete its task in one short transaction."""
+    if not begin_task_completion(db, task):
+        existing = _completed_image_candidate(db, task)
+        if existing is None:
+            raise TaskCompletionConflictError(
+                f"Succeeded image task {task.id} has no persisted candidate"
+            )
+        return existing
+
     payload = task.input_payload if isinstance(task.input_payload, dict) else {}
     request_payload = payload.get("provider_request")
     if not isinstance(request_payload, dict):
@@ -1543,6 +1557,26 @@ def persist_image_candidate_task_result(
     db.refresh(candidate)
     db.refresh(task)
     return candidate
+
+
+def _completed_image_candidate(
+    db: Session,
+    task: GenerationTask,
+) -> AssetCandidate | None:
+    result = task.result_payload if isinstance(task.result_payload, dict) else {}
+    candidate_ids = result.get("candidate_ids")
+    if isinstance(candidate_ids, list):
+        for candidate_id in candidate_ids:
+            candidate = db.get(AssetCandidate, str(candidate_id))
+            if candidate is not None and candidate.source_task_id == task.id:
+                return candidate
+    return db.scalar(
+        select(AssetCandidate)
+        .where(AssetCandidate.source_task_id == task.id)
+        .where(AssetCandidate.asset_type == "image")
+        .order_by(AssetCandidate.created_at, AssetCandidate.id)
+        .limit(1)
+    )
 
 
 def _generate_image_asset(
@@ -1823,6 +1857,15 @@ def _persist_provider_image_asset(
         entity_id=entity_id,
         variant_key=resolved_variant_key,
         source_task_id=source_task_id,
+        completion_key=artifact_completion_key(
+            source_task_id,
+            artifact_kind="asset",
+            asset_type="image",
+            asset_role=resolved_asset_role,
+            entity_type=entity_type,
+            entity_id=entity_id,
+            variant_key=resolved_variant_key,
+        ),
         source_stage_run_id=source_stage_run_id,
         source_script_id=source_script_id,
         source_shot_batch_id=source_shot_batch_id,
@@ -1913,6 +1956,16 @@ def _persist_provider_image_candidate(
         id=candidate_id,
         project_id=project_id,
         source_task_id=source_task_id,
+        completion_key=artifact_completion_key(
+            source_task_id,
+            artifact_kind="candidate",
+            candidate_type="generated",
+            asset_type="image",
+            asset_role=resolved_asset_role,
+            entity_type=entity_type,
+            entity_id=entity_id,
+            variant_key=resolved_variant_key,
+        ),
         source_stage_run_id=source_stage_run_id,
         source_script_id=source_script_id,
         source_shot_batch_id=source_shot_batch_id,
@@ -2321,6 +2374,14 @@ def _persist_grid_cell_assets(
             entity_type="shot",
             entity_id=shot.id,
             source_task_id=grid_asset.source_task_id,
+            completion_key=artifact_completion_key(
+                grid_asset.source_task_id,
+                artifact_kind="asset",
+                asset_type="image",
+                asset_role="shot_storyboard",
+                entity_type="shot",
+                entity_id=shot.id,
+            ),
             source_script_id=shot.script_id,
             source_shot_batch_id=shot.shot_batch_id,
             version=next_asset_version(db, project_id, "image", "shot", shot.id, "shot_storyboard"),

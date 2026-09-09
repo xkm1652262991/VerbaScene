@@ -25,7 +25,9 @@ POST /api/projects/{project_id}/entities/generate
 POST /api/projects/{project_id}/reference-images/generate-candidates -> 202 GenerationTask
 POST /api/projects/{project_id}/reference-images/generate-candidate  -> 202 GenerationTask
 POST /api/asset-candidates/{candidate_id}/promote
+DELETE /api/asset-candidates/{candidate_id}
 POST /api/assets/{asset_id}/select
+DELETE /api/assets/{asset_id}
 POST /api/projects/{project_id}/shots/generate  -> 202 GenerationTask
 PATCH /api/shots/{shot_id}
 PUT   /api/shots/{shot_id}/reference-assets
@@ -42,6 +44,8 @@ POST  /api/assets/{asset_id}/extract-frame -> 202 GenerationTask
 
 图片生成接口均接受可选 `Idempotency-Key`，只创建后台任务。模型输出在任务成功后写入候选，采用与版本选择不改变页面可进入性。批量参考图和片段图生成返回 `waiting_children` 父任务，每个目标创建独立子任务；任一目标已有活动任务时整批原子拒绝。单目标任务冻结 Provider、模型、Prompt、引用素材、版本号和参数，但不持久化密钥。
 
+候选删除只接受未采用或已拒绝版本，正式版本通过独立资产删除接口处理。两类删除都会拒绝仍被活动任务输入快照引用的目标。删除当前正式版本时，服务在同一版本键中自动选择最新剩余版本；删除显式绑定的图片时同步移除 `Shot.shot_card` 中的精确引用并标记 Prompt 可能过期。当前视频发生切换或清空时，片段实际时长必须同步到替代视频，或恢复为规划时长，不能保留已删除视频的时长。
+
 `PUT /api/shots/{shot_id}/reference-assets` 接收按优先级排列的 `asset_ids`。服务只接受同项目、已经采用且可用的角色/场景/道具图片；当前采用版本和状态为 `approved` 的历史版本都可以精确绑定，未采用候选不可绑定；最多一个场景。绑定结果写入 `shot_card.reference_asset_ids`，同时同步 `scene_id`、`character_ids` 和 `prop_ids`，并仅把最终 Prompt 标记为可能过期。该绑定同时服务首帧和视频：首帧生成可以消费道具引用，视频生成会过滤道具图。
 
 视频 Prompt 预览除 `reference_tokens` 外返回结构化 `reference_assets`，内容必须与
@@ -57,9 +61,9 @@ Provider 实际 `content` 顺序一致。应用层最多包含 20 个角色和 1
 
 分镜生成是使用 `resource_key=project:{project_id}:shots` 的持久化后台任务，支持 `Idempotency-Key`、取消和人工重试。任务冻结剧本、Dialogue、实体设定、采用资产元数据与制作规则，执行资产观察、草案、Reflection 和最多一次定点 Patch；成功后原子切换当前 Shot 批次，失败或取消不影响原批次。`result_payload.director_report` 是前端报告合同，Provider 原始响应不属于公共界面合同。
 
-分镜导演只负责语义分段、内部镜头节拍和创意性的分镜图主体 Prompt，不要求 LLM 预测 Shot 或 beat 的秒数，也不选择最终媒体版本或提交视频。每个 Shot 在 `shot_card.beats` 中包含有序的内部镜头，`shot_card.segment_plan.duration_mode` 默认为 `provider_auto`。历史数据里的 `beats[].duration_sec` 继续可读，但不参与 Prompt 编译或片段时长计算。
+分镜导演负责语义分段、每个 Shot 的事件型总时长预算、内部镜头节拍和创意性的分镜图主体 Prompt，但不为 beat 分配秒数，也不选择最终媒体版本或提交视频。每个 Shot 在 `shot_card.beats` 中包含有序内部镜头，在 `segment_plan` 中记录 Agent 规划总时长与依据。历史 beat 时长字段和动作文本内时间码继续可读，但不参与 Prompt 编译。
 
-`POST /api/shots/{shot_id}/video/generate-candidate` 返回 `202 + GenerationTask`，并支持 `duration_mode=provider_auto|fixed`。Seedance 2.0 默认使用 `provider_auto`，Adapter 向 Provider 发送 `duration=-1`；返回的真实时长在候选版本被采用后写入现有的 `Shot.duration_sec` 和 `segment_plan.actual_duration_sec`，供时间线、计费展示与合成使用。`fixed` 只是人工高级覆盖，必须同时提交 `duration_sec`。兼容旧客户端时，只提交 `duration_sec` 视为 `fixed`。
+`POST /api/shots/{shot_id}/video/generate-candidate` 返回 `202 + GenerationTask`，并支持 `duration_mode=provider_auto|fixed`。新 Agent 片段默认使用规划总时长和 `fixed`；用户显式选择 `provider_auto` 时，支持智能时长的 Adapter 发送其自动时长参数。返回的真实时长在候选版本被采用后写入 `Shot.duration_sec` 和 `segment_plan.actual_duration_sec`，供时间线、计费展示与合成使用。历史片段没有规划时长时继续按 Provider 能力选择默认模式。
 
 项目批次端点返回一个 `waiting_children` 父任务，每个当前 Shot 创建独立子任务。
 任一 Shot 已有活动视频任务时整批 `409`，响应列出冲突 Shot，不会产生部分批次。

@@ -28,7 +28,7 @@ class DashScopeImageProvider(ProviderAdapter):
     """Alibaba Cloud Model Studio (DashScope) text-to-image adapter.
 
     DashScope image models do not use the OpenAI Images contract. Wan image
-    models use an asynchronous task API, while Qwen-Image 2.0 uses the
+    models use an asynchronous task API, while Qwen-Image 2.0 and 3.0 use the
     synchronous multimodal-generation API. Result URLs are always downloaded
     before returning so project assets do not depend on short-lived links.
     """
@@ -265,7 +265,7 @@ def _uses_modern_protocol(model: str) -> bool:
 
 
 def _uses_qwen_sync_protocol(model: str) -> bool:
-    return model.strip().lower().startswith("qwen-image-2.0")
+    return model.strip().lower().startswith(("qwen-image-2.0", "qwen-image-3.0"))
 
 
 def _qwen_reference_data_uris(references: list[str]) -> list[str]:

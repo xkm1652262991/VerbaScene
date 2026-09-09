@@ -2,6 +2,7 @@ import re
 from typing import Any
 
 from app.agents.camera_language import professional_movement, professional_shot_size
+from app.agents.shot_timing import strip_internal_timing
 from app.agents.style import (
     DEFAULT_VISUAL_STYLE,
     image_style_dna,
@@ -75,21 +76,25 @@ def build_shot_video_prompt(
     shot_blocks: list[list[str]] = []
     bound_dialogue_ids: set[str] = set()
     shot_action = card.get("action") if isinstance(card.get("action"), dict) else {}
-    start_state = _first_text(shot_action.get("start_state"))
-    end_state = _first_text(shot_action.get("end_state"))
+    start_state = strip_internal_timing(_first_text(shot_action.get("start_state")))
+    end_state = strip_internal_timing(_first_text(shot_action.get("end_state")))
     for index, beat in enumerate(beats, start=1):
-        camera = _first_text(
-            beat.get("camera"),
-            beat.get("camera_language"),
-            card.get("camera"),
-            f"{professional_shot_size(camera_shot or '中景')}，"
-            f"{professional_movement(camera_movement or '固定机位')}",
+        camera = strip_internal_timing(
+            _first_text(
+                beat.get("camera"),
+                beat.get("camera_language"),
+                card.get("camera"),
+                f"{professional_shot_size(camera_shot or '中景')}，"
+                f"{professional_movement(camera_movement or '固定机位')}",
+            )
         )
-        action = _first_text(beat.get("action"), beat.get("description"), description)
+        action = strip_internal_timing(
+            _first_text(beat.get("action"), beat.get("description"), description)
+        )
         if index == 1 and start_state and start_state not in action:
-            action = f"起始：{start_state}；{action}"
+            action = f"起始：{_clause_text(start_state)}；{action.lstrip('。；;，, ')}"
         if index == len(beats) and end_state and end_state not in action:
-            action = f"{action}；收束：{end_state}"
+            action = f"{_clause_text(action)}；收束：{end_state.lstrip('。；;，, ')}"
         block = [f"镜头{index}：{camera}。{action}"]
         beat_dialogues: list[Dialogue] = []
 
@@ -168,6 +173,10 @@ def _normalized_beats(card: dict[str, Any], description: str) -> list[dict[str, 
             "sound_cues": [],
         }
     ]
+
+
+def _clause_text(value: str) -> str:
+    return value.rstrip("。；;，, ")
 
 
 def _reference_binding(

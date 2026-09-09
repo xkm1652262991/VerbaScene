@@ -9,6 +9,7 @@ from pathlib import Path
 from app.core.config import settings
 from app.db import SessionLocal
 from app.exports.contracts import PROJECT_EXPORT_TASK_TYPE
+from app.exports.subtitle_alignment import align_export_subtitles
 from app.models import GenerationTask
 from app.platform.media import get_media_store
 from app.platform.media.subprocess_runner import (
@@ -44,9 +45,16 @@ class ProjectExportTaskHandler:
 
             shutil.rmtree(work_dir, ignore_errors=True)
             work_dir.mkdir(parents=True, exist_ok=True)
+            self._update_progress(task_id, 20, "正在识别对白并对齐字幕")
+            subtitle_alignment = align_export_subtitles(
+                snapshot,
+                work_dir,
+                cancel_requested=lambda: self._cancel_requested(task_id),
+            )
             ffmpeg_args, manifest = build_export_ffmpeg_args_from_snapshot(
                 snapshot,
                 output_path,
+                subtitle_alignment=subtitle_alignment,
             )
             self._update_progress(task_id, 30, "FFmpeg 正在合成成片")
             result = run_cancellable_media_process(

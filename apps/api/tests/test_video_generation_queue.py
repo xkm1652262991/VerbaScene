@@ -141,17 +141,66 @@ class VideoGenerationQueueTests(unittest.TestCase):
                 "segment_plan": {"duration_mode": "provider_auto"},
                 "motion_timing": {
                     "duration_rationale": "固定 8 秒",
-                    "beats": [{"time": "0-3 秒", "action": "角色抬头"}],
+                    "beats": [{"time": "0-3 秒", "action": "0.0-2.0秒，角色抬头；2.0秒后挥手"}],
                 },
             }
 
             prompt = shot_video_prompt(shot)
 
             self.assertIn("角色抬头", prompt)
+            self.assertIn("挥手", prompt)
             self.assertNotIn("固定 8 秒", prompt)
             self.assertNotIn("0-3 秒", prompt)
+            self.assertNotIn("0.0-2.0秒", prompt)
+            self.assertNotIn("2.0秒后", prompt)
             self.assertNotIn("目标时长", prompt)
             self.assertNotIn("时长策略", prompt)
+
+    def test_agent_planned_duration_is_default_for_smart_provider(self):
+        provider = MockVideoProvider()
+        provider.smart_duration = True
+        provider.min_duration_sec = 4
+        provider.max_duration_sec = 15
+        with self.session_factory() as db:
+            shot = self._approved_shot(db)
+            shot.duration_sec = 9
+            shot.shot_card = {
+                "segment_plan": {
+                    "duration_mode": "fixed",
+                    "duration_source": "agent",
+                    "planned_duration_sec": 9,
+                    "actual_duration_sec": None,
+                }
+            }
+            db.commit()
+
+            with patch("app.production.legacy_video_generation.provider_registry.get", return_value=provider):
+                task = create_single_shot_video_candidate_task(db, shot.id)
+
+            self.assertEqual(task.input_payload["duration_mode"], "fixed")
+            self.assertEqual(float(task.input_payload["duration_sec"]), 9)
+
+    def test_legacy_actual_duration_does_not_override_smart_provider_default(self):
+        provider = MockVideoProvider()
+        provider.smart_duration = True
+        provider.min_duration_sec = 4
+        provider.max_duration_sec = 15
+        with self.session_factory() as db:
+            shot = self._approved_shot(db)
+            shot.duration_sec = 9
+            shot.shot_card = {
+                "segment_plan": {
+                    "duration_mode": "fixed",
+                    "actual_duration_sec": "9",
+                }
+            }
+            db.commit()
+
+            with patch("app.production.legacy_video_generation.provider_registry.get", return_value=provider):
+                task = create_single_shot_video_candidate_task(db, shot.id)
+
+            self.assertEqual(task.input_payload["duration_mode"], "provider_auto")
+            self.assertIsNone(task.input_payload["duration_sec"])
 
     def test_waiting_task_can_be_removed_and_same_shot_requeued(self):
         with self.session_factory() as db:

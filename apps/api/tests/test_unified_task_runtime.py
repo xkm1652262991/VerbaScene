@@ -10,6 +10,7 @@ from sqlalchemy.orm import sessionmaker
 
 from app.db.session import create_database_engine, initialize_database
 from app.models import GenerationTask, Project
+from app.platform.tasks.lease import TaskLeaseLostError, task_execution_lease
 from app.platform.tasks.repository import TaskConflictError, TaskRepository
 from app.platform.tasks.runtime import LocalTaskRuntime
 from app.platform.tasks.types import (
@@ -180,6 +181,77 @@ class UnifiedTaskRepositoryTests(unittest.TestCase):
             db.commit()
             task = db.get(GenerationTask, task_id)
             self.assertGreaterEqual(task.lease_expires_at.replace(tzinfo=timezone.utc), now + timedelta(seconds=18))
+
+    def test_reclaimed_task_rejects_stale_writes_even_for_the_same_worker(self):
+        repository = TaskRepository()
+        with self.session_factory() as db:
+            task = repository.create(
+                db,
+                project_id=self.project_id,
+                task_type="script_generation",
+                resource_key=f"project:{self.project_id}:script",
+                input_payload={},
+            ).task
+            db.commit()
+            task_id = task.id
+        now = datetime.now(timezone.utc) + timedelta(milliseconds=10)
+
+        with self.session_factory() as db:
+            first = repository.claim_next(
+                db,
+                task_types=("script_generation",),
+                owner="reused-worker-name",
+                lease_seconds=1,
+                now=now,
+            )
+            db.commit()
+            first_token = first.lease_token
+
+        stale_db = self.session_factory()
+        try:
+            stale_task = stale_db.get(GenerationTask, task_id)
+            with self.session_factory() as db:
+                second = repository.claim_next(
+                    db,
+                    task_types=("script_generation",),
+                    owner="reused-worker-name",
+                    lease_seconds=30,
+                    now=now + timedelta(seconds=2),
+                )
+                db.commit()
+                second_token = second.lease_token
+
+            self.assertNotEqual(first_token, second_token)
+            self.assertFalse(
+                repository.finish(
+                    stale_db,
+                    stale_task,
+                    status=TaskStatus.SUCCEEDED,
+                    progress_label="stale completion",
+                )
+            )
+            stale_db.commit()
+
+            with task_execution_lease(
+                task_id,
+                "reused-worker-name",
+                str(first_token),
+            ):
+                with self.session_factory() as db:
+                    current = db.get(GenerationTask, task_id)
+                    current.progress_label = "stale checkpoint"
+                    db.add(current)
+                    with self.assertRaises(TaskLeaseLostError):
+                        db.commit()
+                    db.rollback()
+        finally:
+            stale_db.close()
+
+        with self.session_factory() as db:
+            current = db.get(GenerationTask, task_id)
+            self.assertEqual(current.status, TaskStatus.RUNNING.value)
+            self.assertEqual(current.lease_token, second_token)
+            self.assertNotEqual(current.progress_label, "stale checkpoint")
 
     def test_cancel_and_retry_release_and_reacquire_dedupe_key(self):
         repository = TaskRepository()
@@ -403,6 +475,33 @@ class UnifiedTaskRepositoryTests(unittest.TestCase):
             self.assertEqual(task.status, TaskStatus.SUCCEEDED.value)
             self.assertIsNone(task.lease_owner)
             self.assertIsNone(task.active_dedupe_key)
+
+    def test_script_lane_worker_count_is_configurable(self):
+        class Handler:
+            task_type = "script-worker-count"
+            lane = TaskLane.SCRIPT
+
+            def execute(self, task_id: str) -> None:
+                _ = task_id
+
+            def cancel(self, task_id: str) -> None:
+                _ = task_id
+
+        runtime = LocalTaskRuntime(
+            session_factory=self.session_factory,
+            script_concurrency=2,
+        )
+        runtime.register(Handler())
+        runtime.start()
+        try:
+            script_workers = [
+                thread
+                for thread in runtime._threads
+                if thread.name.startswith("task-script-")
+            ]
+            self.assertEqual(len(script_workers), 2)
+        finally:
+            runtime.stop(timeout_sec=2)
 
 
 if __name__ == "__main__":

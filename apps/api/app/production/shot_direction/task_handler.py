@@ -13,8 +13,7 @@ class ShotDirectionTaskHandler:
             execute_shot_direction_task(db, task_id)
 
     def cancel(self, task_id: str) -> None:
-        # LLM calls do not expose reliable remote cancellation. The running
-        # pipeline stops at the next durable checkpoint; this path handles a
-        # task claimed after it had already entered `cancelling`.
+        # A running OpenAI-compatible stream stops at its next progress chunk;
+        # this path handles a task claimed after it was already cancelling.
         with SessionLocal() as db:
             cancel_shot_direction_stage(db, task_id)

@@ -7,19 +7,25 @@ import tempfile
 import unittest
 
 from fastapi import HTTPException
+from PIL import Image, ImageDraw
 from sqlalchemy.orm import sessionmaker
 
 from app.core.config import settings
 from app.db.session import create_database_engine, initialize_database
+from app.exports.subtitle_alignment import AlignedDialogueTiming
 from app.models import Asset, Project, Shot
 from app.services.export_service import (
     SubtitleCue,
+    SubtitleFontError,
     _build_ffmpeg_args,
     _dialogue_subtitle_cues,
+    _font_supports_text,
     _media_input,
     _parse_srt_cues,
     _probe_has_audio,
     _run_ffmpeg,
+    _subtitle_font,
+    _wrap_subtitle_text,
 )
 from app.services.asset_service import extract_video_frame_candidate
 
@@ -108,9 +114,201 @@ class ExportServiceTests(unittest.TestCase):
         )
 
         self.assertEqual(english[0].start_sec, Decimal("2"))
-        self.assertEqual(english[0].end_sec, Decimal("4"))
+        self.assertEqual(english[0].end_sec, Decimal("3.85"))
         self.assertEqual(english[0].text, "Look at the red ball!")
+        self.assertEqual(bilingual[0].start_sec, english[0].start_sec)
+        self.assertEqual(bilingual[0].end_sec, english[0].end_sec)
         self.assertEqual(bilingual[0].text, "Look at the red ball!\n看这个红色的球！")
+
+    def test_fallback_subtitle_does_not_fill_a_long_shot(self):
+        shot = SimpleNamespace(
+            id="shot-1",
+            duration_sec=Decimal("8"),
+            shot_card={"beats": [{"beat_id": "beat-1"}, {"beat_id": "beat-2"}]},
+        )
+        dialogue = SimpleNamespace(
+            id="dialogue-1",
+            shot_id="shot-1",
+            beat_id=None,
+            sequence_order=0,
+            start_time=None,
+            end_time=None,
+            text="It's stuck.",
+            translation_zh="它卡住了。",
+        )
+
+        cues = _dialogue_subtitle_cues(
+            dialogues=[dialogue],
+            shots=[shot],
+            mode="bilingual",
+        )
+
+        self.assertEqual(cues[0].start_sec, Decimal("0"))
+        self.assertEqual(cues[0].end_sec, Decimal("1.5"))
+        self.assertLess(cues[0].end_sec, shot.duration_sec)
+
+    def test_missing_and_invalid_beat_ids_share_one_non_overlapping_window(self):
+        shot = SimpleNamespace(
+            id="shot-1",
+            duration_sec=Decimal("10"),
+            shot_card={"beats": [{"beat_id": "beat-1"}, {"beat_id": "beat-2"}]},
+        )
+        dialogues = [
+            SimpleNamespace(
+                id="dialogue-1",
+                shot_id="shot-1",
+                beat_id=None,
+                sequence_order=0,
+                start_time=None,
+                end_time=None,
+                text="Oh no!",
+                translation_zh="哎呀！",
+            ),
+            SimpleNamespace(
+                id="dialogue-2",
+                shot_id="shot-1",
+                beat_id="missing-beat",
+                sequence_order=1,
+                start_time=None,
+                end_time=None,
+                text="The ball!",
+                translation_zh="球！",
+            ),
+        ]
+
+        cues = _dialogue_subtitle_cues(
+            dialogues=dialogues,
+            shots=[shot],
+            mode="en",
+        )
+
+        self.assertEqual(
+            [(cue.start_sec, cue.end_sec) for cue in cues],
+            [(Decimal("0"), Decimal("1.5")), (Decimal("5"), Decimal("6.5"))],
+        )
+        self.assertLess(cues[0].end_sec, cues[1].start_sec)
+
+    def test_explicit_subtitle_end_time_remains_authoritative(self):
+        shot = SimpleNamespace(
+            id="shot-1",
+            duration_sec=Decimal("10"),
+            shot_card={},
+        )
+        dialogue = SimpleNamespace(
+            id="dialogue-1",
+            shot_id="shot-1",
+            beat_id=None,
+            sequence_order=0,
+            start_time=Decimal("1"),
+            end_time=Decimal("8"),
+            text="Hold this subtitle.",
+            translation_zh=None,
+        )
+
+        cues = _dialogue_subtitle_cues(
+            dialogues=[dialogue],
+            shots=[shot],
+            mode="en",
+        )
+
+        self.assertEqual(cues[0].start_sec, Decimal("1"))
+        self.assertEqual(cues[0].end_sec, Decimal("8"))
+
+    def test_asr_timing_overrides_heuristic_but_not_subtitle_text(self):
+        shot = SimpleNamespace(
+            id="shot-1",
+            duration_sec=Decimal("10"),
+            shot_card={},
+        )
+        dialogue = SimpleNamespace(
+            id="dialogue-1",
+            shot_id="shot-1",
+            beat_id=None,
+            sequence_order=0,
+            start_time=None,
+            end_time=None,
+            text="Slow is fine.",
+            translation_zh="慢一点没关系。",
+        )
+
+        cues = _dialogue_subtitle_cues(
+            dialogues=[dialogue],
+            shots=[shot],
+            mode="bilingual",
+            aligned_timings={
+                "dialogue-1": AlignedDialogueTiming(
+                    dialogue_id="dialogue-1",
+                    start_sec=Decimal("3.2"),
+                    end_sec=Decimal("5.6"),
+                    confidence=0.98,
+                )
+            },
+        )
+
+        self.assertEqual(cues[0].start_sec, Decimal("3.2"))
+        self.assertEqual(cues[0].end_sec, Decimal("5.6"))
+        self.assertEqual(cues[0].text, "Slow is fine.\n慢一点没关系。")
+        self.assertEqual(cues[0].timing_source, "asr")
+        self.assertEqual(cues[0].confidence, 0.98)
+
+    def test_fallback_subtitle_reading_duration_is_capped_at_four_seconds(self):
+        shot = SimpleNamespace(
+            id="shot-1",
+            duration_sec=Decimal("20"),
+            shot_card={},
+        )
+        dialogue = SimpleNamespace(
+            id="dialogue-1",
+            shot_id="shot-1",
+            beat_id=None,
+            sequence_order=0,
+            start_time=None,
+            end_time=None,
+            text="This deliberately long subtitle contains far more words than a short cue.",
+            translation_zh=None,
+        )
+
+        cues = _dialogue_subtitle_cues(
+            dialogues=[dialogue],
+            shots=[shot],
+            mode="en",
+        )
+
+        self.assertEqual(cues[0].end_sec - cues[0].start_sec, Decimal("4"))
+
+    def test_subtitle_font_covers_bilingual_text_instead_of_silent_tofu(self):
+        text = "Bye, Mimi.\n再见，咪咪。"
+        font = _subtitle_font(32, text)
+
+        self.assertTrue(_font_supports_text(font, text))
+        self.assertNotIn("Arial.ttf", str(getattr(font, "path", "")))
+
+    def test_invalid_explicit_subtitle_font_fails_clearly(self):
+        original_font_path = settings.subtitle_font_path
+        try:
+            with tempfile.TemporaryDirectory() as tmpdir:
+                invalid_font = Path(tmpdir) / "invalid-font.ttf"
+                invalid_font.write_bytes(b"not-a-font")
+                settings.subtitle_font_path = str(invalid_font)
+
+                with self.assertRaises(SubtitleFontError) as raised:
+                    _subtitle_font(32, "Hello\n你好")
+
+                self.assertIn("cannot be loaded", str(raised.exception))
+        finally:
+            settings.subtitle_font_path = original_font_path
+
+    def test_long_chinese_subtitle_wraps_without_spaces(self):
+        text = "这是一句需要自动换行的较长中文字幕文本。"
+        font = _subtitle_font(28, text)
+        draw = ImageDraw.Draw(Image.new("RGBA", (320, 180)))
+
+        lines = _wrap_subtitle_text(text, draw, font, 120, 2)
+
+        self.assertGreater(len(lines), 1)
+        for line in lines:
+            bounds = draw.textbbox((0, 0), line, font=font, stroke_width=2)
+            self.assertLessEqual(bounds[2] - bounds[0], 120)
 
     def test_parse_srt_cues_remains_compatible_with_legacy_exports(self):
         cues = _parse_srt_cues(

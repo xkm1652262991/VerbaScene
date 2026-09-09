@@ -29,6 +29,7 @@ from app.agents.script_prompts import (
 )
 from app.agents.script_screenplay import parse_screenplay_response
 from app.providers.base import ProviderAdapter
+from app.providers.openai_chat_params import structured_json_params
 from app.providers.types import (
     ProviderRequest,
     ProviderResponse,
@@ -371,6 +372,7 @@ def _phase_response(
     state["inflight_phase"] = {
         "phase": phase,
         "attempted_at": datetime.now(timezone.utc).isoformat(),
+        "submission_state": SubmissionState.NOT_SUBMITTED.value,
     }
     _publish(
         state,
@@ -378,20 +380,26 @@ def _phase_response(
         f"{phase} 正在提交 Provider",
         max(1, progress - 1),
     )
-    response = provider.submit(
+    response = provider.submit_streaming(
         ProviderRequest(
             project_id=source.project_id,
             task_id=f"{task_id}:{phase}",
             model=model,
             prompt=prompt,
             system_prompt=system_prompt,
-            params={"temperature": temperature},
+            params=structured_json_params(temperature=temperature),
             metadata={
                 "stage": "script_generation",
                 "phase": phase,
                 "pipeline_version": SCRIPT_QUALITY_PIPELINE_VERSION,
             },
-        )
+        ),
+        on_progress=_stream_progress_callback(
+            state,
+            phase=phase,
+            callback=on_checkpoint,
+            progress=max(1, progress - 1),
+        ),
     )
     record = _response_record(
         response,
@@ -409,6 +417,8 @@ def _phase_response(
             "provider": record["provider"],
             "model": record["model"],
             "temperature": temperature,
+            "response_format": "json_object",
+            "streaming": "streaming" in provider.capabilities,
         }
     )
     _publish(state, on_checkpoint, f"{phase} 模型响应已保存", progress)
@@ -485,3 +495,41 @@ def _publish(
 ) -> None:
     if callback is not None:
         callback(deepcopy(state), label, progress)
+
+
+def _stream_progress_callback(
+    state: dict[str, Any],
+    *,
+    phase: str,
+    callback: CheckpointCallback | None,
+    progress: int,
+) -> Callable[[dict[str, Any]], None] | None:
+    if callback is None:
+        return None
+
+    def publish_stream_progress(event: dict[str, Any]) -> None:
+        inflight = state.get("inflight_phase")
+        if not isinstance(inflight, dict) or inflight.get("phase") != phase:
+            return
+        inflight["submission_state"] = str(
+            event.get("submission_state") or SubmissionState.ACCEPTED.value
+        )
+        inflight["stream_progress"] = {
+            "event": str(event.get("event") or "stream_delta"),
+            "elapsed_sec": float(event.get("elapsed_sec") or 0),
+            "chunk_count": int(event.get("chunk_count") or 0),
+            "content_chars": int(event.get("content_chars") or 0),
+            "reasoning_chars": int(event.get("reasoning_chars") or 0),
+        }
+        detail = inflight["stream_progress"]
+        _publish(
+            state,
+            callback,
+            (
+                f"{phase} 流式生成中 · {detail['elapsed_sec']:.0f}s · "
+                f"正文 {detail['content_chars']} 字 / 推理 {detail['reasoning_chars']} 字"
+            ),
+            progress,
+        )
+
+    return publish_stream_progress

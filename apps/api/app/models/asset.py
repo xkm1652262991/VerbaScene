@@ -12,6 +12,9 @@ from app.models.base import IdMixin, TimestampMixin
 
 class Asset(IdMixin, TimestampMixin, Base):
     __tablename__ = "assets"
+    __table_args__ = (
+        UniqueConstraint("completion_key", name="uq_assets_completion_key"),
+    )
 
     project_id: Mapped[str] = mapped_column(
         String(36),
@@ -25,6 +28,7 @@ class Asset(IdMixin, TimestampMixin, Base):
     entity_id: Mapped[str | None] = mapped_column(String(36), index=True)
     variant_key: Mapped[str | None] = mapped_column(String(120), index=True)
     source_task_id: Mapped[str | None] = mapped_column(String(36), index=True)
+    completion_key: Mapped[str | None] = mapped_column(String(160))
     source_stage_run_id: Mapped[str | None] = mapped_column(String(36), index=True)
     source_script_id: Mapped[str | None] = mapped_column(String(36), index=True)
     source_shot_batch_id: Mapped[str | None] = mapped_column(String(36), index=True)
@@ -47,6 +51,12 @@ class Asset(IdMixin, TimestampMixin, Base):
 
 class AssetCandidate(IdMixin, TimestampMixin, Base):
     __tablename__ = "asset_candidates"
+    __table_args__ = (
+        UniqueConstraint(
+            "completion_key",
+            name="uq_asset_candidates_completion_key",
+        ),
+    )
 
     project_id: Mapped[str] = mapped_column(
         String(36),
@@ -60,6 +70,7 @@ class AssetCandidate(IdMixin, TimestampMixin, Base):
         index=True,
     )
     source_task_id: Mapped[str | None] = mapped_column(String(36), index=True)
+    completion_key: Mapped[str | None] = mapped_column(String(160))
     source_stage_run_id: Mapped[str | None] = mapped_column(String(36), index=True)
     source_script_id: Mapped[str | None] = mapped_column(String(36), index=True)
     source_shot_batch_id: Mapped[str | None] = mapped_column(String(36), index=True)
@@ -135,6 +146,7 @@ class GenerationTask(IdMixin, TimestampMixin, Base):
     raw_response: Mapped[dict] = mapped_column(JSON_DOCUMENT, default=dict, nullable=False)
     available_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
     lease_owner: Mapped[str | None] = mapped_column(String(160), index=True)
+    lease_token: Mapped[str | None] = mapped_column(String(36), index=True)
     lease_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
     heartbeat_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     cancel_requested_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

@@ -13,6 +13,7 @@ class ScriptGenerationTaskHandler:
             execute_script_generation_task(db, task_id)
 
     def cancel(self, task_id: str) -> None:
-        # LLM stages are synchronous and do not expose remote cancellation.
-        # The pipeline observes cancel_requested_at at its next checkpoint.
+        # OpenAI-compatible LLM streams observe cancellation from their next
+        # progress chunk. This path only handles a task claimed after it had
+        # already entered `cancelling`.
         _ = task_id

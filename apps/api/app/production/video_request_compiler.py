@@ -48,6 +48,12 @@ def compile_video_candidate_task_input(
         shot.shot_card = shot_card_with_duration_mode(
             shot.shot_card,
             resolved_duration_mode,
+            planned_duration_sec=(
+                resolved_duration if resolved_duration_mode == "fixed" else None
+            ),
+            duration_source=(
+                "manual" if duration_mode == "fixed" or duration_sec is not None else None
+            ),
         )
         if video_prompt is not None:
             shot.video_prompt = video_prompt.strip() or None
@@ -240,6 +246,7 @@ def resolve_video_duration_request(
     duration_sec: Decimal | None,
 ) -> tuple[str, Decimal | None]:
     mode = str(duration_mode or "").strip()
+    planned_mode, planned_duration = _shot_duration_plan(shot)
     if mode and mode not in {"provider_auto", "fixed"}:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
@@ -247,6 +254,10 @@ def resolve_video_duration_request(
         )
     if not mode:
         if duration_sec is not None:
+            mode = "fixed"
+        elif planned_mode == "provider_auto" and bool(getattr(provider, "smart_duration", False)):
+            mode = "provider_auto"
+        elif planned_duration is not None:
             mode = "fixed"
         elif bool(getattr(provider, "smart_duration", False)):
             mode = "provider_auto"
@@ -271,7 +282,13 @@ def resolve_video_duration_request(
             )
         return mode, None
 
-    resolved_duration = duration_sec if duration_sec is not None else shot.duration_sec
+    resolved_duration = (
+        duration_sec
+        if duration_sec is not None
+        else planned_duration
+        if planned_duration is not None
+        else shot.duration_sec
+    )
     if duration_mode == "fixed" and resolved_duration is None:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
@@ -394,7 +411,13 @@ def shot_card_with_video_prompt(card: object, video_prompt: str | None) -> dict[
     return updated
 
 
-def shot_card_with_duration_mode(card: object, duration_mode: str) -> dict[str, Any]:
+def shot_card_with_duration_mode(
+    card: object,
+    duration_mode: str,
+    *,
+    planned_duration_sec: Decimal | None = None,
+    duration_source: str | None = None,
+) -> dict[str, Any]:
     updated = dict(card) if isinstance(card, dict) else {}
     segment_plan = (
         dict(updated.get("segment_plan"))
@@ -402,8 +425,28 @@ def shot_card_with_duration_mode(card: object, duration_mode: str) -> dict[str, 
         else {}
     )
     segment_plan["duration_mode"] = duration_mode
+    if duration_mode == "fixed" and planned_duration_sec is not None:
+        segment_plan["planned_duration_sec"] = str(planned_duration_sec)
+        if duration_source:
+            segment_plan["duration_source"] = duration_source
+        else:
+            segment_plan.setdefault("duration_source", "runtime")
     updated["segment_plan"] = segment_plan
     return updated
+
+
+def _shot_duration_plan(shot: Shot) -> tuple[str, Decimal | None]:
+    raw_card = getattr(shot, "shot_card", None)
+    card = raw_card if isinstance(raw_card, dict) else {}
+    segment_plan = (
+        card.get("segment_plan")
+        if isinstance(card.get("segment_plan"), dict)
+        else {}
+    )
+    return (
+        str(segment_plan.get("duration_mode") or ""),
+        decimal_or_none(segment_plan.get("planned_duration_sec")),
+    )
 
 
 def decimal_or_none(value: object) -> Decimal | None:

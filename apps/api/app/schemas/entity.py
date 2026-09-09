@@ -51,6 +51,7 @@ class CharacterAssetSpec(BaseModel):
             views=["正面全身", "侧面全身", "面部近景"],
         )
     )
+    image_prompts: dict[str, dict[str, Any]] = Field(default_factory=dict)
 
 
 class SceneAssetSpec(BaseModel):
@@ -72,6 +73,7 @@ class SceneAssetSpec(BaseModel):
             views=["空间全景", "关键区域视图"],
         )
     )
+    image_prompts: dict[str, dict[str, Any]] = Field(default_factory=dict)
 
 
 class PropAssetSpec(BaseModel):
@@ -89,6 +91,7 @@ class PropAssetSpec(BaseModel):
     state_variants: list[AssetStateVariant] = Field(default_factory=list)
     source_evidence: list[AssetSourceEvidence] = Field(default_factory=list)
     reference_plan: AssetReferencePlan = Field(default_factory=AssetReferencePlan)
+    image_prompts: dict[str, dict[str, Any]] = Field(default_factory=dict)
 
 
 class CharacterRead(BaseModel):

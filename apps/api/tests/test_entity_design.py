@@ -19,7 +19,7 @@ from app.agents.entity_extraction import (
     parse_entity_extraction_response,
 )
 from app.agents.shot_breakdown import build_shot_breakdown_prompt
-from app.schemas.entity import CharacterUpdate
+from app.schemas.entity import CharacterUpdate, PropUpdate, SceneUpdate
 
 
 class EntityDesignTests(unittest.TestCase):
@@ -389,6 +389,35 @@ class EntityDesignTests(unittest.TestCase):
     def test_manual_update_schema_rejects_compiled_prompt_fields(self):
         with self.assertRaises(ValidationError):
             CharacterUpdate.model_validate({"fixed_prompt": "手工覆盖"})
+
+    def test_manual_update_schema_preserves_editable_image_prompts(self):
+        cases = (
+            (CharacterUpdate, "character_main_ref"),
+            (SceneUpdate, "scene_ref"),
+            (PropUpdate, "prop_ref"),
+        )
+        for schema, role in cases:
+            with self.subTest(schema=schema.__name__):
+                payload = schema.model_validate(
+                    {
+                        "asset_spec": {
+                            "image_prompts": {
+                                role: {
+                                    "positive_prompt": "只保留干净主体",
+                                    "negative_prompt": "多余角色",
+                                }
+                            }
+                        }
+                    }
+                ).model_dump(exclude_none=True)
+
+                self.assertEqual(
+                    payload["asset_spec"]["image_prompts"][role],
+                    {
+                        "positive_prompt": "只保留干净主体",
+                        "negative_prompt": "多余角色",
+                    },
+                )
 
     @staticmethod
     def _bird_spec():

@@ -3,6 +3,7 @@ from typing import Any
 
 from app.models import Character, Prop, Scene, Shot
 from app.agents.prompt_engineering import build_shot_video_prompt
+from app.agents.shot_timing import strip_internal_timing
 
 
 WAN_I2V_PROMPT_VERSION = "native-audio-video-prompt-v1"
@@ -16,7 +17,7 @@ def shot_video_prompt(
     props: list[Prop] | None = None,
 ) -> str:
     if isinstance(shot.video_prompt, str) and shot.video_prompt.strip():
-        return shot.video_prompt.strip()
+        return strip_internal_timing(shot.video_prompt)
     card = shot.shot_card if isinstance(shot.shot_card, dict) else {}
     project = getattr(shot, "project", None)
     return build_shot_video_prompt(

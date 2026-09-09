@@ -23,9 +23,10 @@ from app.platform.media.subprocess_runner import (
 )
 from app.platform.tasks.repository import TaskConflictError, TaskRepository
 from app.platform.tasks.types import SubmissionState, TaskExecutionError, TaskLane, TaskStatus
+from app.services.artifact_idempotency import artifact_completion_key
 from app.services.asset_repository import next_candidate_version
 from app.services.stage_run_service import finish_latest_stage_run
-from app.services.task_service import mark_task_succeeded
+from app.services.task_service import begin_task_completion, mark_task_succeeded
 from app.services.workflow_state_service import mark_stage_failed, mark_stage_ready, mark_stage_running
 
 
@@ -195,9 +196,21 @@ class VideoFrameExtractionTaskHandler:
                     get_media_store().delete(candidate_uri)
                     return
                 try:
+                    if not begin_task_completion(db, task):
+                        get_media_store().delete(candidate_uri)
+                        return
                     candidate = AssetCandidate(
                         project_id=task.project_id,
                         source_task_id=task.id,
+                        completion_key=artifact_completion_key(
+                            task.id,
+                            artifact_kind="candidate",
+                            candidate_type="extracted_frame",
+                            asset_type="image",
+                            asset_role="shot_storyboard",
+                            entity_type="shot",
+                            entity_id=str(snapshot.get("shot_id") or ""),
+                        ),
                         source_script_id=snapshot.get("source_script_id"),
                         source_shot_batch_id=snapshot.get("source_shot_batch_id"),
                         candidate_type="extracted_frame",

@@ -17,10 +17,19 @@ from sqlalchemy.orm import Session
 
 from app.agents import total_duration
 from app.core.config import settings
+from app.exports.subtitle_alignment import (
+    AlignedDialogueTiming,
+    SubtitleAlignmentResult,
+)
 from app.models import Asset, Dialogue, Export, GenerationTask, Project, Shot
 from app.platform.media import get_media_store
+from app.services.artifact_idempotency import artifact_completion_key
 from app.services.workflow_state_service import mark_stage_failed, mark_stage_ready, mark_stage_running
-from app.services.task_service import mark_task_succeeded
+from app.services.task_service import (
+    TaskCompletionConflictError,
+    begin_task_completion,
+    mark_task_succeeded,
+)
 
 
 @dataclass(frozen=True)
@@ -28,6 +37,9 @@ class SubtitleCue:
     start_sec: Decimal
     end_sec: Decimal
     text: str
+    dialogue_id: str | None = None
+    timing_source: str = "heuristic"
+    confidence: float | None = None
 
 
 @dataclass(frozen=True)
@@ -36,6 +48,17 @@ class SubtitleOverlay:
     end_sec: Decimal
     text: str
     image_path: Path
+
+
+_SUBTITLE_MIN_DISPLAY_SEC = Decimal("1.5")
+_SUBTITLE_MAX_DISPLAY_SEC = Decimal("4.0")
+_SUBTITLE_READING_LEAD_SEC = Decimal("0.5")
+_SUBTITLE_WORDS_PER_SEC = Decimal("2.5")
+_SUBTITLE_CJK_CHARS_PER_SEC = Decimal("5")
+_SUBTITLE_EXIT_GAP_SEC = Decimal("0.15")
+_SUBTITLE_ORPHAN_GAP_SEC = Decimal("0.2")
+_LATIN_WORD_PATTERN = re.compile(r"[A-Za-z0-9]+(?:['’][A-Za-z0-9]+)*")
+_CJK_CHARACTER_PATTERN = re.compile(r"[\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]")
 
 
 def compose_project(
@@ -146,6 +169,13 @@ def compose_project(
         "subtitle_mode": subtitle_mode,
         "subtitle_cue_count": len(subtitle_cues),
         "dialogue_ids": [dialogue.id for dialogue in dialogues],
+        "subtitle_alignment": {
+            "policy_version": "asr-vad-v1",
+            "status": "not_run",
+            "aligned_count": 0,
+            "fallback_count": len(subtitle_cues),
+        },
+        "subtitle_cues": _subtitle_cue_manifest(subtitle_cues),
     }
     asset = Asset(
         project_id=project_id,
@@ -283,6 +313,8 @@ def compile_export_task_input(
 def build_export_ffmpeg_args_from_snapshot(
     snapshot: dict[str, Any],
     output_path: Path,
+    *,
+    subtitle_alignment: SubtitleAlignmentResult | None = None,
 ) -> tuple[list[str], dict[str, Any]]:
     shots = [
         SimpleNamespace(
@@ -338,6 +370,9 @@ def build_export_ffmpeg_args_from_snapshot(
             dialogues=dialogues,
             shots=shots,
             mode=subtitle_mode,
+            aligned_timings=(
+                subtitle_alignment.timings if subtitle_alignment is not None else None
+            ),
         )
     )
     args = _build_ffmpeg_args(
@@ -370,6 +405,17 @@ def build_export_ffmpeg_args_from_snapshot(
         "subtitle_mode": subtitle_mode,
         "subtitle_cue_count": len(subtitle_cues),
         "dialogue_ids": [dialogue.id for dialogue in dialogues],
+        "subtitle_alignment": (
+            subtitle_alignment.to_manifest()
+            if subtitle_alignment is not None
+            else {
+                "policy_version": "asr-vad-v1",
+                "status": "not_run",
+                "aligned_count": 0,
+                "fallback_count": len(subtitle_cues),
+            }
+        ),
+        "subtitle_cues": _subtitle_cue_manifest(subtitle_cues),
     }
     return args, manifest
 
@@ -382,6 +428,16 @@ def persist_export_task_result(
     ffmpeg_args: list[str],
     manifest: dict[str, Any],
 ) -> tuple[Export, Asset]:
+    if not begin_task_completion(db, task):
+        result = task.result_payload if isinstance(task.result_payload, dict) else {}
+        export = db.get(Export, str(result.get("export_id") or ""))
+        asset = db.get(Asset, str(result.get("asset_id") or ""))
+        if export is None or asset is None or asset.source_task_id != task.id:
+            raise TaskCompletionConflictError(
+                f"Succeeded export task {task.id} has no persisted export result"
+            )
+        return export, asset
+
     snapshot = task.input_payload if isinstance(task.input_payload, dict) else {}
     resolution = str(snapshot.get("resolution") or "854x480")
     duration_sec = Decimal(str(snapshot.get("duration_sec") or 0))
@@ -406,6 +462,14 @@ def persist_export_task_result(
         entity_type="project",
         entity_id=task.project_id,
         source_task_id=task.id,
+        completion_key=artifact_completion_key(
+            task.id,
+            artifact_kind="asset",
+            asset_type="final_video",
+            asset_role="final_export",
+            entity_type="project",
+            entity_id=task.project_id,
+        ),
         version=version,
         uri=output_uri,
         mime_type="video/mp4",
@@ -466,6 +530,7 @@ def persist_export_task_result(
             "asset_id": asset.id,
             "version": version,
             "subtitle_mode": subtitle_mode,
+            "subtitle_alignment": dict(manifest.get("subtitle_alignment") or {}),
         },
         raw_response={
             **dict(task.raw_response or {}),
@@ -731,6 +796,7 @@ def _dialogue_subtitle_cues(
     dialogues: list[Dialogue],
     shots: list[Shot],
     mode: str,
+    aligned_timings: dict[str, AlignedDialogueTiming] | None = None,
 ) -> list[SubtitleCue]:
     shot_offsets: dict[str, Decimal] = {}
     cursor = Decimal("0")
@@ -738,41 +804,140 @@ def _dialogue_subtitle_cues(
         shot_offsets[shot.id] = cursor
         cursor += Decimal(str(shot.duration_sec or 0))
 
-    grouped_by_beat: dict[tuple[str | None, str | None], list[Dialogue]] = {}
+    shots_by_id = {shot.id: shot for shot in shots}
+    dialogue_windows: dict[int, tuple[Decimal, Decimal]] = {}
+    grouped_by_window: dict[tuple[str, Decimal, Decimal], list[Dialogue]] = {}
     for dialogue in dialogues:
-        grouped_by_beat.setdefault((dialogue.shot_id, dialogue.beat_id), []).append(dialogue)
+        shot = shots_by_id.get(dialogue.shot_id or "")
+        if shot is None:
+            continue
+        beat_start, beat_duration = _beat_window(shot, dialogue.beat_id)
+        dialogue_windows[id(dialogue)] = (beat_start, beat_duration)
+        grouped_by_window.setdefault(
+            (shot.id, beat_start, beat_duration),
+            [],
+        ).append(dialogue)
+    for peers in grouped_by_window.values():
+        peers.sort(
+            key=lambda item: (
+                int(getattr(item, "sequence_order", 0) or 0),
+                str(getattr(item, "id", "")),
+            )
+        )
 
     cues: list[SubtitleCue] = []
     fallback_cursor = Decimal("0")
-    shots_by_id = {shot.id: shot for shot in shots}
     for dialogue in dialogues:
+        dialogue_id = str(getattr(dialogue, "id", "") or "")
+        source_text = str(dialogue.text or "").strip()
+        text = source_text
+        if mode == "bilingual" and (dialogue.translation_zh or "").strip():
+            text = f"{source_text}\n{dialogue.translation_zh.strip()}"
+        reading_duration = _subtitle_reading_duration(source_text)
+        timing_source = "heuristic"
+        confidence: float | None = None
         if dialogue.start_time is not None:
             start = Decimal(dialogue.start_time)
             end = (
                 Decimal(dialogue.end_time)
                 if dialogue.end_time is not None
-                else start + Decimal("2")
+                else start + reading_duration
             )
+            timing_source = "manual"
+        elif aligned_timings and dialogue_id in aligned_timings:
+            aligned = aligned_timings[dialogue_id]
+            start = aligned.start_sec
+            end = aligned.end_sec
+            timing_source = "asr"
+            confidence = aligned.confidence
         else:
             shot = shots_by_id.get(dialogue.shot_id or "")
             if shot is not None:
-                beat_start, beat_duration = _beat_window(shot, dialogue.beat_id)
-                peers = grouped_by_beat.get((dialogue.shot_id, dialogue.beat_id), [dialogue])
-                peer_index = peers.index(dialogue)
+                beat_start, beat_duration = dialogue_windows[id(dialogue)]
+                peers = grouped_by_window[
+                    (shot.id, beat_start, beat_duration)
+                ]
+                peer_index = next(
+                    index for index, peer in enumerate(peers) if peer is dialogue
+                )
                 slice_duration = beat_duration / max(1, len(peers))
-                start = shot_offsets[shot.id] + beat_start + slice_duration * peer_index
-                end = start + slice_duration
+                slot_start = (
+                    shot_offsets[shot.id]
+                    + beat_start
+                    + slice_duration * peer_index
+                )
+                start, end = _fit_subtitle_to_slot(
+                    slot_start=slot_start,
+                    slot_duration=slice_duration,
+                    reading_duration=reading_duration,
+                )
             else:
                 start = fallback_cursor
-                end = start + Decimal("2")
-                fallback_cursor = end
+                end = start + reading_duration
+                fallback_cursor = end + _SUBTITLE_ORPHAN_GAP_SEC
         if end <= start:
-            end = start + Decimal("0.8")
-        text = dialogue.text
-        if mode == "bilingual" and (dialogue.translation_zh or "").strip():
-            text = f"{dialogue.text}\n{dialogue.translation_zh.strip()}"
-        cues.append(SubtitleCue(start_sec=start, end_sec=end, text=text))
+            end = start + reading_duration
+        cues.append(
+            SubtitleCue(
+                start_sec=start,
+                end_sec=end,
+                text=text,
+                dialogue_id=dialogue_id or None,
+                timing_source=timing_source,
+                confidence=confidence,
+            )
+        )
     return cues
+
+
+def _subtitle_cue_manifest(cues: list[SubtitleCue]) -> list[dict[str, Any]]:
+    return [
+        {
+            "dialogue_id": cue.dialogue_id,
+            "start_sec": str(cue.start_sec),
+            "end_sec": str(cue.end_sec),
+            "timing_source": cue.timing_source,
+            "confidence": cue.confidence,
+        }
+        for cue in cues
+    ]
+
+
+def _subtitle_reading_duration(text: str) -> Decimal:
+    line_durations: list[Decimal] = []
+    for raw_line in text.splitlines() or [text]:
+        line = raw_line.strip()
+        if not line:
+            continue
+        cjk_count = len(_CJK_CHARACTER_PATTERN.findall(line))
+        latin_word_count = len(_LATIN_WORD_PATTERN.findall(line))
+        reading_seconds = (
+            Decimal(cjk_count) / _SUBTITLE_CJK_CHARS_PER_SEC
+            + Decimal(latin_word_count) / _SUBTITLE_WORDS_PER_SEC
+        )
+        if not cjk_count and not latin_word_count:
+            reading_seconds = Decimal(len("".join(line.split()))) / Decimal("12")
+        line_durations.append(reading_seconds + _SUBTITLE_READING_LEAD_SEC)
+
+    estimated = max(line_durations, default=_SUBTITLE_MIN_DISPLAY_SEC)
+    return min(
+        _SUBTITLE_MAX_DISPLAY_SEC,
+        max(_SUBTITLE_MIN_DISPLAY_SEC, estimated),
+    )
+
+
+def _fit_subtitle_to_slot(
+    *,
+    slot_start: Decimal,
+    slot_duration: Decimal,
+    reading_duration: Decimal,
+) -> tuple[Decimal, Decimal]:
+    if slot_duration <= 0:
+        return slot_start, slot_start + reading_duration
+    exit_gap = min(_SUBTITLE_EXIT_GAP_SEC, slot_duration / Decimal("10"))
+    slot_end = slot_start + slot_duration
+    end_limit = slot_end - exit_gap
+    return slot_start, min(slot_start + reading_duration, end_limit)
 
 
 def _beat_window(shot: Shot, beat_id: str | None) -> tuple[Decimal, Decimal]:
@@ -787,7 +952,7 @@ def _beat_window(shot: Shot, beat_id: str | None) -> tuple[Decimal, Decimal]:
     beat_duration = segment_duration / Decimal(len(ordered_beats))
     for index, beat in enumerate(ordered_beats):
         if beat_id and str(beat.get("beat_id") or "") == beat_id:
-            return beat_duration * index, max(beat_duration, Decimal("0.8"))
+            return beat_duration * index, beat_duration
     return Decimal("0"), Decimal(str(shot.duration_sec or 2))
 
 
@@ -896,7 +1061,7 @@ def _render_subtitle_image(
     image = Image.new("RGBA", (width, height), (0, 0, 0, 0))
     draw = ImageDraw.Draw(image)
     font_size = max(28, int(height * 0.054))
-    font = _subtitle_font(font_size)
+    font = _subtitle_font(font_size, text)
     stroke_width = max(2, int(font_size * 0.07))
     lines = _wrap_subtitle_text(
         text.replace("\r", ""),
@@ -950,17 +1115,41 @@ def _wrap_subtitle_text(
 ) -> list[str]:
     result: list[str] = []
     for raw_line in text.splitlines():
-        words = raw_line.strip().split(" ")
+        line = raw_line.strip()
+        if not line:
+            continue
+        if _subtitle_text_width(draw, font, line, stroke_width) <= max_width:
+            result.append(line)
+            continue
+        if not any(character.isspace() for character in line):
+            result.extend(
+                _wrap_subtitle_token(line, draw, font, max_width, stroke_width)
+            )
+            continue
+
+        words = line.split()
         current = ""
         for word in words:
+            if _subtitle_text_width(draw, font, word, stroke_width) > max_width:
+                if current:
+                    result.append(current)
+                    current = ""
+                pieces = _wrap_subtitle_token(
+                    word,
+                    draw,
+                    font,
+                    max_width,
+                    stroke_width,
+                )
+                result.extend(pieces[:-1])
+                current = pieces[-1] if pieces else ""
+                continue
             candidate = word if not current else f"{current} {word}"
-            bbox = draw.textbbox(
-                (0, 0),
-                candidate,
-                font=font,
-                stroke_width=stroke_width,
-            )
-            if current and bbox[2] - bbox[0] > max_width:
+            if (
+                current
+                and _subtitle_text_width(draw, font, candidate, stroke_width)
+                > max_width
+            ):
                 result.append(current)
                 current = word
             else:
@@ -970,20 +1159,143 @@ def _wrap_subtitle_text(
     return result or [text.strip()]
 
 
-def _subtitle_font(font_size: int) -> ImageFont.ImageFont:
-    for path in (
-        "/System/Library/Fonts/Supplemental/Arial.ttf",
-        "/System/Library/Fonts/STHeiti Light.ttc",
-        "/System/Library/Fonts/Supplemental/Songti.ttc",
-        "/Library/Fonts/Arial Unicode.ttf",
-    ):
-        font_path = Path(path)
-        if font_path.is_file():
-            try:
-                return ImageFont.truetype(str(font_path), font_size)
-            except OSError:
-                continue
-    return ImageFont.load_default()
+def _wrap_subtitle_token(
+    token: str,
+    draw: ImageDraw.ImageDraw,
+    font: ImageFont.ImageFont,
+    max_width: int,
+    stroke_width: int,
+) -> list[str]:
+    parts: list[str] = []
+    current = ""
+    for character in token:
+        candidate = f"{current}{character}"
+        if (
+            current
+            and _subtitle_text_width(draw, font, candidate, stroke_width)
+            > max_width
+        ):
+            parts.append(current)
+            current = character
+        else:
+            current = candidate
+    if current:
+        parts.append(current)
+    return parts
+
+
+def _subtitle_text_width(
+    draw: ImageDraw.ImageDraw,
+    font: ImageFont.ImageFont,
+    text: str,
+    stroke_width: int,
+) -> int:
+    bbox = draw.textbbox(
+        (0, 0),
+        text,
+        font=font,
+        stroke_width=stroke_width,
+    )
+    return max(0, bbox[2] - bbox[0])
+
+
+class SubtitleFontError(RuntimeError):
+    pass
+
+
+_SUBTITLE_FONT_PATHS = (
+    "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
+    "/usr/share/fonts/opentype/noto/NotoSansCJKsc-Regular.otf",
+    "/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc",
+    "/usr/share/fonts/truetype/wqy/wqy-zenhei.ttc",
+    "/System/Library/Fonts/STHeiti Light.ttc",
+    "/System/Library/Fonts/STHeiti Medium.ttc",
+    "/System/Library/Fonts/Hiragino Sans GB.ttc",
+    "/System/Library/Fonts/Supplemental/Songti.ttc",
+    "/System/Library/Fonts/Supplemental/Arial Unicode.ttf",
+    "/Library/Fonts/Arial Unicode.ttf",
+    "C:/Windows/Fonts/msyh.ttc",
+    "C:/Windows/Fonts/msyh.ttf",
+    "C:/Windows/Fonts/simhei.ttf",
+    "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+    "/System/Library/Fonts/Supplemental/Arial.ttf",
+)
+
+
+def _subtitle_font(font_size: int, text: str) -> ImageFont.ImageFont:
+    configured = (settings.subtitle_font_path or "").strip()
+    configured_path = Path(configured).expanduser() if configured else None
+    if configured_path is not None and not configured_path.is_file():
+        raise SubtitleFontError(
+            f"Configured subtitle font does not exist: {configured_path}"
+        )
+
+    candidates = (
+        ([configured_path] if configured_path is not None else [])
+        + [Path(path) for path in _SUBTITLE_FONT_PATHS]
+    )
+    seen: set[Path] = set()
+    for font_path in candidates:
+        if font_path in seen or not font_path.is_file():
+            continue
+        seen.add(font_path)
+        try:
+            font = ImageFont.truetype(str(font_path), font_size)
+        except OSError as exc:
+            if configured_path is not None and font_path == configured_path:
+                raise SubtitleFontError(
+                    f"Configured subtitle font cannot be loaded: {font_path}"
+                ) from exc
+            continue
+        if _font_supports_text(font, text):
+            return font
+        if configured_path is not None and font_path == configured_path:
+            raise SubtitleFontError(
+                "Configured subtitle font does not cover every subtitle glyph: "
+                f"{font_path}"
+            )
+
+    default_font = ImageFont.load_default()
+    if _font_supports_text(default_font, text):
+        return default_font
+
+    required = "".join(
+        dict.fromkeys(
+            character
+            for character in text
+            if not character.isspace() and ord(character) > 127
+        )
+    )[:16]
+    detail = f" Required non-ASCII glyphs: {required}" if required else ""
+    raise SubtitleFontError(
+        "No installed subtitle font covers the requested text. "
+        "Install Noto Sans CJK or set SUBTITLE_FONT_PATH."
+        f"{detail}"
+    )
+
+
+def _font_supports_text(font: ImageFont.ImageFont, text: str) -> bool:
+    try:
+        missing_signature = _glyph_signature(font, "\U0010ffff")
+    except (OSError, UnicodeError, ValueError):
+        return False
+    for character in dict.fromkeys(text):
+        if character.isspace():
+            continue
+        try:
+            if _glyph_signature(font, character) == missing_signature:
+                return False
+        except (OSError, UnicodeError, ValueError):
+            return False
+    return True
+
+
+def _glyph_signature(
+    font: ImageFont.ImageFont,
+    character: str,
+) -> tuple[tuple[int, int], bytes]:
+    mask = font.getmask(character)
+    return mask.size, bytes(mask)
 
 
 def _run_ffmpeg(args: list[str], output_path: Path) -> None:

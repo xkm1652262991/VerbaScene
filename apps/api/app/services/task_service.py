@@ -2,10 +2,16 @@ from datetime import datetime, timezone
 from typing import Any
 
 from fastapi import HTTPException, status
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 from sqlalchemy.orm import Session
 
 from app.models import GenerationTask
+from app.platform.tasks.lease import (
+    TaskLeaseLostError,
+    acquire_task_lease_fence,
+    current_task_execution_lease,
+)
+from app.platform.tasks.types import TERMINAL_TASK_STATUSES, TaskStatus
 from app.services.failure_reason_service import attach_failure_reason, normalize_failure_reason
 
 
@@ -107,6 +113,62 @@ def _publish_task_progress(db: Session, task: GenerationTask) -> None:
     db.refresh(task)
 
 
+class TaskCompletionConflictError(RuntimeError):
+    """A terminal task cannot be completed with a different outcome."""
+
+
+def begin_task_completion(db: Session, task: GenerationTask) -> bool:
+    """Serialize completion delivery and report whether work still needs persisting.
+
+    The task row is the idempotency boundary. Concurrent or replayed completion
+    deliveries wait for the first transaction, refresh its durable status, and
+    reuse the already-persisted result instead of creating another version.
+    """
+    execution_lease = current_task_execution_lease()
+    if execution_lease is not None and execution_lease.task_id == task.id:
+        fenced = acquire_task_lease_fence(
+            db,
+            task_id=task.id,
+            owner=execution_lease.owner,
+            token=execution_lease.token,
+        )
+        if not fenced:
+            raise TaskLeaseLostError(
+                f"Task {task.id} rejected completion from a superseded lease"
+            )
+    elif task.lease_owner and task.lease_token:
+        fenced = acquire_task_lease_fence(
+            db,
+            task_id=task.id,
+            owner=task.lease_owner,
+            token=task.lease_token,
+        )
+        if not fenced:
+            raise TaskLeaseLostError(
+                f"Task {task.id} rejected completion from a superseded lease"
+            )
+    else:
+        # A no-op UPDATE is portable across SQLite and PostgreSQL and takes the
+        # row lock needed to serialize two completion deliveries.
+        result = db.execute(
+            update(GenerationTask)
+            .where(GenerationTask.id == task.id)
+            .values(heartbeat_at=GenerationTask.heartbeat_at)
+            .execution_options(synchronize_session=False)
+        )
+        if result.rowcount != 1:
+            raise TaskCompletionConflictError(f"Task {task.id} no longer exists")
+
+    db.refresh(task)
+    if task.status == TaskStatus.SUCCEEDED.value:
+        return False
+    if task.status in TERMINAL_TASK_STATUSES:
+        raise TaskCompletionConflictError(
+            f"Task {task.id} is already terminal with status {task.status}"
+        )
+    return True
+
+
 def mark_task_succeeded(
     db: Session,
     task: GenerationTask,
@@ -116,6 +178,12 @@ def mark_task_succeeded(
     raw_response: dict[str, Any] | None = None,
     provider_task_id: str | None = None,
 ) -> None:
+    if task.status == TaskStatus.SUCCEEDED.value:
+        return
+    if task.status in TERMINAL_TASK_STATUSES:
+        raise TaskCompletionConflictError(
+            f"Task {task.id} cannot transition from {task.status} to succeeded"
+        )
     task.status = "succeeded"
     task.progress = 100
     task.progress_label = "已完成"
@@ -126,6 +194,7 @@ def mark_task_succeeded(
     task.finished_at = datetime.now(timezone.utc)
     task.active_dedupe_key = None
     task.lease_owner = None
+    task.lease_token = None
     task.lease_expires_at = None
     db.flush()
 
@@ -140,6 +209,8 @@ def mark_task_failed(
     provider_task_id: str | None = None,
     failure_reason: dict[str, Any] | None = None,
 ) -> None:
+    if task.status in TERMINAL_TASK_STATUSES:
+        return
     base_raw_response = raw_response if raw_response is not None else task.raw_response
     normalized_failure_reason = failure_reason or normalize_failure_reason(
         code=code,
@@ -158,15 +229,19 @@ def mark_task_failed(
     task.finished_at = datetime.now(timezone.utc)
     task.active_dedupe_key = None
     task.lease_owner = None
+    task.lease_token = None
     task.lease_expires_at = None
     db.flush()
 
 
 def mark_task_cancelled(db: Session, task: GenerationTask, *, message: str = "任务已取消") -> None:
+    if task.status in TERMINAL_TASK_STATUSES:
+        return
     task.status = "cancelled"
     task.progress_label = message
     task.finished_at = datetime.now(timezone.utc)
     task.active_dedupe_key = None
     task.lease_owner = None
+    task.lease_token = None
     task.lease_expires_at = None
     db.flush()

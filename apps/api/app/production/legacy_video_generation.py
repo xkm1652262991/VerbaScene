@@ -38,6 +38,7 @@ from app.production.video_request_compiler import (
     shot_entities_from_context,
     shot_video_provider_params,
 )
+from app.services.artifact_idempotency import artifact_completion_key
 from app.services.asset_lifecycle_service import apply_actual_video_duration_to_shot
 from app.services.asset_repository import (
     asset_source_context,
@@ -296,7 +297,12 @@ def generate_single_shot_video(
     )
     if resolved_duration_mode == "fixed" and resolved_duration is not None:
         shot.duration_sec = resolved_duration
-    shot.shot_card = shot_card_with_duration_mode(shot.shot_card, resolved_duration_mode)
+    shot.shot_card = shot_card_with_duration_mode(
+        shot.shot_card,
+        resolved_duration_mode,
+        planned_duration_sec=resolved_duration if resolved_duration_mode == "fixed" else None,
+        duration_source="manual" if duration_mode == "fixed" or duration_sec is not None else None,
+    )
     if video_prompt is not None:
         shot.video_prompt = video_prompt.strip() or None
         shot.shot_card = shot_card_with_video_prompt(shot.shot_card, shot.video_prompt)
@@ -434,7 +440,12 @@ def create_single_shot_video_candidate_task(
     )
     if resolved_duration_mode == "fixed" and resolved_duration is not None:
         shot.duration_sec = resolved_duration
-    shot.shot_card = shot_card_with_duration_mode(shot.shot_card, resolved_duration_mode)
+    shot.shot_card = shot_card_with_duration_mode(
+        shot.shot_card,
+        resolved_duration_mode,
+        planned_duration_sec=resolved_duration if resolved_duration_mode == "fixed" else None,
+        duration_source="manual" if duration_mode == "fixed" or duration_sec is not None else None,
+    )
     if video_prompt is not None:
         shot.video_prompt = video_prompt.strip() or None
         shot.shot_card = shot_card_with_video_prompt(shot.shot_card, shot.video_prompt)
@@ -947,6 +958,15 @@ def _persist_provider_video_asset(
         entity_id=entity_id,
         variant_key="base" if entity_type in {"character", "scene", "prop"} else None,
         source_task_id=source_task_id,
+        completion_key=artifact_completion_key(
+            source_task_id,
+            artifact_kind="asset",
+            asset_type="video",
+            asset_role=resolved_asset_role,
+            entity_type=entity_type,
+            entity_id=entity_id,
+            variant_key="base" if entity_type in {"character", "scene", "prop"} else None,
+        ),
         source_stage_run_id=source_stage_run_id,
         source_script_id=source_script_id,
         source_shot_batch_id=source_shot_batch_id,

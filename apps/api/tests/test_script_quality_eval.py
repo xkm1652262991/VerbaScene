@@ -46,6 +46,37 @@ class ScriptQualityEvalTests(unittest.TestCase):
             result["issues"],
         )
 
+    def test_joint_line_is_not_rejected_only_because_it_is_spoken_in_unison(self):
+        case = next(case for case in load_script_quality_cases() if case["id"] == "share-red-ball")
+        payload = {
+            "scenes": [
+                {
+                    "scene_no": 1,
+                    "title": "一起滚球",
+                    "characters": ["Mia", "Leo"],
+                    "props": ["红球"],
+                    "visible_action": "Mia和Leo轮流滚红球，最后一起击掌。",
+                    "story_purpose": "通过轮流滚球解决分享问题。",
+                    "start_state": "红球在Mia手里。",
+                    "end_state": "两人轮流玩红球。",
+                    "dialogues": [
+                        {
+                            "speaker": "Mia和Leo",
+                            "text": "We did it!",
+                            "emotion": "齐声欢呼",
+                        }
+                    ],
+                }
+            ]
+        }
+
+        result = evaluate_script_output(case, payload)
+
+        self.assertTrue(result["passed"], result["issues"])
+        self.assertFalse(
+            any("齐声" in item["forbidden_tokens"] for item in load_script_quality_cases())
+        )
+
     def test_pairwise_packet_is_blind_and_answer_key_is_separate(self):
         cases = load_script_quality_cases()[:2]
         outputs_a = {case["id"]: {"scenes": [{"visible_action": "版本A"}]} for case in cases}

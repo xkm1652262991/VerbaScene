@@ -33,6 +33,7 @@ const requiredOperations = [
   ["post", "/api/asset-candidates/{candidate_id}/promote"],
   ["post", "/api/asset-candidates/{candidate_id}/reject"],
   ["post", "/api/asset-candidates/{candidate_id}/regenerate"],
+  ["delete", "/api/asset-candidates/{candidate_id}"],
   ["post", "/api/projects/{project_id}/reference-images/generate-candidates"],
   ["post", "/api/projects/{project_id}/reference-images/generate-candidate"],
   ["post", "/api/projects/{project_id}/shot-images/generate-candidates"],

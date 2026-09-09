@@ -20,6 +20,7 @@ from app.agents.entity_design import (
 from app.core.config import settings
 from app.models import Character, GenerationTask, Project, Prop, Scene, Script
 from app.providers.defaults import provider_registry
+from app.providers.openai_chat_params import structured_json_params
 from app.providers.types import ProviderRequest, ProviderStatus, ProviderType
 from app.schemas.entity import CharacterUpdate, PropUpdate, SceneUpdate
 from app.scripts.speaker_policy import filter_visual_characters
@@ -236,7 +237,7 @@ def generate_entities(db: Session, project_id: str) -> tuple[list[Character], li
                     approved_entities=approved_entity_context,
                 ),
             ),
-            params={"temperature": 0.35},
+            params=structured_json_params(temperature=0.35),
             metadata={"stage": "entity_extraction"},
         ),
     )

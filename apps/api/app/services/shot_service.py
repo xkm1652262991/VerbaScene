@@ -175,7 +175,14 @@ def update_shot(db: Session, shot_id: str, payload: ShotUpdate) -> Shot:
             if isinstance(card.get("segment_plan"), dict)
             else {}
         )
-        segment_plan["duration_mode"] = "fixed" if updates["duration_sec"] is not None else "provider_auto"
+        if updates["duration_sec"] is not None:
+            segment_plan["duration_mode"] = "fixed"
+            segment_plan["duration_source"] = "manual"
+            segment_plan["planned_duration_sec"] = str(updates["duration_sec"])
+        else:
+            segment_plan["duration_mode"] = "provider_auto"
+            segment_plan["duration_source"] = "manual"
+            segment_plan["planned_duration_sec"] = None
         segment_plan["actual_duration_sec"] = None
         card["segment_plan"] = segment_plan
         shot.shot_card = card
@@ -547,10 +554,13 @@ def build_fallback_shot_card(data: dict[str, Any]) -> dict[str, Any]:
         },
     )
     card.setdefault("schema_version", 3)
+    planned_duration = data.get("duration_sec")
     card.setdefault(
         "segment_plan",
         {
-            "duration_mode": "provider_auto",
+            "duration_mode": "fixed" if planned_duration is not None else "provider_auto",
+            "duration_source": "manual" if planned_duration is not None else "legacy_or_manual",
+            "planned_duration_sec": str(planned_duration) if planned_duration is not None else None,
             "expected_duration_range": {"min_sec": 4, "max_sec": 15},
             "actual_duration_sec": None,
             "internal_shot_count": len(card.get("beats") or []) or 1,

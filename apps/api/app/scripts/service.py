@@ -23,6 +23,7 @@ from app.scripts.contracts import SCRIPT_GENERATION_TASK_TYPE
 from app.services.agent_config_service import resolve_agent_config
 from app.services.dialogue_service import synchronize_script_dialogues
 from app.services.failure_reason_service import normalize_failure_reason
+from app.services.stage_run_service import finish_latest_stage_run
 from app.services.task_service import mark_task_failed, mark_task_running, mark_task_succeeded, update_task_progress
 from app.services.workflow_state_service import (
     mark_downstream_stages_pending,
@@ -187,7 +188,11 @@ def execute_script_generation_task(db: Session, task_id: str) -> tuple[Script, G
         task.provider_task_id = _last_provider_task_id(value)
         update_task_progress(db, task, label, progress)
         if task.cancel_requested_at is not None or task.status == "cancelling":
-            if isinstance(value.get("inflight_phase"), dict):
+            inflight = value.get("inflight_phase")
+            if (
+                isinstance(inflight, dict)
+                and inflight.get("submission_state") == SubmissionState.NOT_SUBMITTED.value
+            ):
                 # Cancellation won the race before submit(). Do not leave an
                 # uncertainty marker for a request that was never sent.
                 task.raw_response = previous_raw_response
@@ -211,6 +216,19 @@ def execute_script_generation_task(db: Session, task_id: str) -> tuple[Script, G
             checkpoint=checkpoint,
             on_checkpoint=persist_checkpoint,
         )
+    except TaskExecutionError as exc:
+        if exc.code == "task_cancelled":
+            finish_latest_stage_run(
+                db,
+                task.project_id,
+                "script",
+                status="cancelled",
+                task_id=task.id,
+                error_code="script_task_cancelled",
+                error_message="剧本任务已取消",
+            )
+            db.commit()
+        raise
     except ScriptPipelineFailure as exc:
         failure_checkpoint = exc.checkpoint
         if (

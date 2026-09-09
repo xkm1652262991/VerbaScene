@@ -90,7 +90,7 @@ class MediaTaskRuntimeTests(unittest.TestCase):
             self.assertEqual(task.status, TaskStatus.QUEUED.value)
             self.assertEqual(task.input_payload["subtitle_mode"], "bilingual")
 
-        def fake_build(_snapshot, output_path):
+        def fake_build(_snapshot, output_path, **_kwargs):
             return ["ffmpeg", "-y", str(output_path)], {"shots": [], "subtitle_mode": "bilingual"}
 
         def fake_run(args, **_kwargs):

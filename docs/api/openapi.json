@@ -1918,6 +1918,14 @@
             "title": "Hair Or Surface",
             "type": "string"
           },
+          "image_prompts": {
+            "additionalProperties": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "title": "Image Prompts",
+            "type": "object"
+          },
           "reference_plan": {
             "$ref": "#/components/schemas/AssetReferencePlan"
           },
@@ -4853,6 +4861,14 @@
             "title": "Holder Relation",
             "type": "string"
           },
+          "image_prompts": {
+            "additionalProperties": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "title": "Image Prompts",
+            "type": "object"
+          },
           "materials": {
             "items": {
               "type": "string"
@@ -5835,6 +5851,14 @@
             },
             "title": "Fixed Landmarks",
             "type": "array"
+          },
+          "image_prompts": {
+            "additionalProperties": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "title": "Image Prompts",
+            "type": "object"
           },
           "location_type": {
             "default": "",

@@ -5,8 +5,40 @@
 - `llm`
 - `image`
 - `video`
+- `asr`（仅供成片字幕对齐，当前通过环境变量配置，不进入模型管理页）
 
 声音不再是独立 Provider 槽位。
+
+## LLM 结构化输出与流式执行
+
+剧本、分镜和实体提取的 JSON 阶段必须显式发送
+`response_format={"type":"json_object"}`，不得只依赖 Prompt 中的“只输出 JSON”。本地解析与确定性
+合同校验仍是最终信任边界；JSON mode 只降低语法错误，不代替 schema 验证。
+
+OpenAI-compatible 文本 Adapter 通过 `submit_streaming()` 消费 SSE 分片，在内存中汇总为原有
+`ProviderResponse` 合同，同时定期上报已接收的正文、推理字符数和耗时。应用不持久化
+未完成的模型文本，只持久化进度摘要。取消请求在下一个 SSE 分片时关闭本地连接；
+这是尽力取消，不等价于 Provider 已停止计费或远程生成。
+
+ASR 不是声音生成能力。它只读取已采用视频的临时音频副本，输出带时间戳的转写结果；
+不得修改剧本对白、视频资产或采用状态。
+
+## OpenAI-compatible ASR Adapter
+
+当前 ASR Adapter 调用 `POST {ASR_BASE_URL}/audio/transcriptions`，使用 Bearer Key 和
+multipart WAV 文件，模型由 `ASR_MODEL` 指定。请求优先使用 `verbose_json` 并申请
+word/segment timestamp；Adapter 统一兼容 `words`、`segments`、`time_stamps` 和
+`chunks` 等常见时间戳字段。若网关明确不支持 `verbose_json`，Adapter 降级为普通 JSON，
+由应用层先做 VAD 分段、逐段转写，再把每段文本插值为规范化 token 时间轴。
+
+- 输入音频由 FFmpeg 从每个已采用视频中提取为 16 kHz、单声道 PCM WAV。
+- Key 只允许放在后端环境变量，不进入任务快照、manifest、数据库响应或日志。
+- Provider 原生时间戳优先；纯文本响应只有在输入本身已经由 VAD 定位到短语音区间时才能驱动字幕，
+  不允许把整段视频的一份纯文本伪装成精确时间戳。
+- 401/403、网络失败、无音轨、无时间戳和低置信度匹配都不得阻止成片导出；对应 Dialogue
+  回退到确定性阅读时长，并在导出 manifest 中记录原因。
+- ASR 文本只用于定位。最终烧录内容仍使用已冻结的 `Dialogue.text` 和
+  `Dialogue.translation_zh`，不得用识别结果悄悄改写剧本。
 
 ## 公开视频能力
 

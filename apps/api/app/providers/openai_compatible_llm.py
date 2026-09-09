@@ -6,20 +6,24 @@ from uuid import NAMESPACE_URL, uuid5
 
 from app.core.config import settings
 from app.providers.base import ProviderAdapter
+from app.providers.openai_chat_params import add_temperature_if_supported
+from app.providers.openai_chat_stream import read_openai_chat_stream
 from app.providers.types import (
     ProviderError,
+    ProviderProgressCallback,
     ProviderRequest,
     ProviderResponse,
     ProviderStatus,
     ProviderType,
     ProviderUsage,
+    SubmissionState,
 )
 
 
 class OpenAICompatibleLLMProvider(ProviderAdapter):
     name = "openai_compatible"
     type = ProviderType.LLM
-    capabilities = ["text_generation", "json_generation", "openai_compatible_chat"]
+    capabilities = ["text_generation", "json_generation", "openai_compatible_chat", "streaming"]
 
     def __init__(self) -> None:
         self.model = settings.llm_model
@@ -33,10 +37,40 @@ class OpenAICompatibleLLMProvider(ProviderAdapter):
             raise ValueError("LLM_API_KEY is required for openai_compatible LLM provider")
 
     def submit(self, request: ProviderRequest) -> ProviderResponse:
+        return self._submit(request, stream=False, on_progress=None)
+
+    def submit_streaming(
+        self,
+        request: ProviderRequest,
+        *,
+        on_progress: ProviderProgressCallback | None = None,
+    ) -> ProviderResponse:
+        return self._submit(request, stream=True, on_progress=on_progress)
+
+    def _submit(
+        self,
+        request: ProviderRequest,
+        *,
+        stream: bool,
+        on_progress: ProviderProgressCallback | None,
+    ) -> ProviderResponse:
         provider_task_id = str(uuid5(NAMESPACE_URL, f"{request.project_id}:{request.task_id}:openai-compatible-llm"))
+        submission_accepted = False
+
+        def track_progress(progress: dict) -> None:
+            nonlocal submission_accepted
+            if progress.get("submission_state") == SubmissionState.ACCEPTED.value:
+                submission_accepted = True
+            if on_progress is not None:
+                on_progress(progress)
+
         try:
             self.validate_config()
-            raw_response = self._chat_completion(request)
+            raw_response = self._chat_completion(
+                request,
+                stream=stream,
+                on_progress=track_progress if stream else None,
+            )
         except (HTTPError, URLError, TimeoutError, ValueError) as exc:
             return ProviderResponse(
                 status=ProviderStatus.FAILED,
@@ -46,6 +80,11 @@ class OpenAICompatibleLLMProvider(ProviderAdapter):
                     error_code="openai_compatible_llm_failed",
                     error_message=str(exc),
                     is_retryable=True,
+                    submission_state=(
+                        SubmissionState.UNKNOWN
+                        if submission_accepted
+                        else SubmissionState.NOT_SUBMITTED
+                    ),
                 ),
             )
 
@@ -61,9 +100,16 @@ class OpenAICompatibleLLMProvider(ProviderAdapter):
             usage=ProviderUsage(cost=Decimal("0"), unit="USD"),
         )
 
-    def _chat_completion(self, request: ProviderRequest) -> dict:
+    def _chat_completion(
+        self,
+        request: ProviderRequest,
+        *,
+        stream: bool = False,
+        on_progress: ProviderProgressCallback | None = None,
+    ) -> dict:
+        model = request.model or self.model
         payload = {
-            "model": request.model or self.model,
+            "model": model,
             "messages": [
                 {
                     "role": "system",
@@ -75,10 +121,13 @@ class OpenAICompatibleLLMProvider(ProviderAdapter):
                     "content": request.prompt,
                 },
             ],
-            "temperature": request.params.get("temperature", 0.7),
         }
+        add_temperature_if_supported(payload, model=model, params=request.params)
         if request.params.get("response_format"):
             payload["response_format"] = request.params["response_format"]
+        if stream:
+            payload["stream"] = True
+            payload["stream_options"] = {"include_usage": True}
         http_request = Request(
             f"{self.base_url}/chat/completions",
             data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
@@ -89,6 +138,12 @@ class OpenAICompatibleLLMProvider(ProviderAdapter):
             method="POST",
         )
         with urlopen(http_request, timeout=settings.provider_timeout_sec) as response:
+            if stream:
+                return read_openai_chat_stream(
+                    response,
+                    on_progress=on_progress,
+                    progress_interval_sec=settings.llm_stream_progress_interval_sec,
+                )
             return json.loads(response.read().decode("utf-8"))
 
 

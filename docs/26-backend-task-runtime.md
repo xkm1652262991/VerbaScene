@@ -35,17 +35,22 @@ queued
 
 Worker 使用条件更新领取到期任务：只有 `queued` 或已到轮询时间的
 `waiting_provider`，且租约为空或过期，才能被设置为 `running` 并写入
-`lease_owner / lease_expires_at / heartbeat_at`。
+`lease_owner / lease_token / lease_expires_at / heartbeat_at`。`lease_token` 在每次 claim
+时重新生成，即使同一 Worker 名称重新领取同一任务，旧执行也不能冒用新租约。
 
-- 剧本并发固定为 1。
+- 剧本与分镜共用 `script` 通道，并发读取 `SCRIPT_GENERATION_CONCURRENCY`，默认 2、上限 4。
 - 图片并发读取 `IMAGE_GENERATION_CONCURRENCY`，上限为 2。
 - 视频并发读取 `VIDEO_GENERATION_CONCURRENCY`，上限为 2。
 - FFmpeg 截帧和导出共用单并发 `media` 通道，避免本机媒体任务互相争抢资源。
 - Worker 执行期间续租；Provider 调用和媒体下载期间不持有数据库事务。
+- Handler 事务在 flush/commit 前原子校验 `task_id + lease_owner + lease_token +
+  lease_expires_at`；失去租约的旧 Worker 整个事务回滚，不得写进度、终态或关联产物。
 - 服务启动只回收过期租约，不把所有 `running` 任务无条件重置。
 - 服务关闭停止领取新任务；未完成任务在租约过期后可恢复。
 
 剧本 Provider 调用在提交前先保存 `inflight_phase`，响应返回后再保存阶段记录。
+支持 SSE 的文本 Adapter 会在调用中持久化字符数和耗时摘要，任务取消在下一个
+流式分片时关闭本地连接。未完成正文不写入 checkpoint。
 如果重启时只存在 `inflight_phase` 而没有响应，结果必须是
 `provider_submission_uncertain`，不得重复调用该阶段。
 
@@ -62,6 +67,10 @@ FFmpeg 是本地、可重复执行的确定性步骤。截帧和导出在进程�
 - `resource_key` 描述业务资源，例如 `project:{id}:script` 或 `shot:{id}:video`。
 - 非终态任务同时持有相同值的 `active_dedupe_key`；该列使用唯一约束。
 - 生成端点接受可选 `Idempotency-Key`，同项目、任务类型和 key 返回原任务。
+- completion 以任务行作为串行化边界：重复或并发投递先锁定任务，已成功时直接复用
+  `result_payload` 指向的结果。
+- 任务产物另以 `completion_key` 施加数据库唯一约束。键中包含逻辑产物槽位，
+  所以一个宫格任务可以生成多张不同图，同一槽位的重放却不会增加版本。
 - 自动重试最多一次，只允许 `retryable=true` 且
   `submission_state=not_submitted` 的失败。
 - `submission_state=accepted` 必须从 `provider_task_id` 恢复轮询。
@@ -74,7 +83,7 @@ FFmpeg 是本地、可重复执行的确定性步骤。截帧和导出在进程�
 - 排队任务立即进入 `cancelled`。
 - 运行或等待 Provider 的任务进入 `cancelling`。
 - Provider 支持取消且已有远端任务 ID 时调用 `cancel()`。
-- Provider 不支持取消时，在下一检查点停止本地处理并忽略迟到结果。
+- 同步流式 LLM 在下一个 SSE 分片停止本地读取；非流式且 Provider 不支持取消时，在下一检查点停止。
 - 取消批次父任务会向所有非终态子任务传播取消请求。
 
 ## 6. 图片与视频 Provider 合同
@@ -132,6 +141,8 @@ PostgreSQL 使用新 Alembic revision。SQLite 继续使用本地增量迁移，
 - 迁移前处于 `queued` 的旧视频任务在首次领取时一次性补齐并冻结输入。
 - 如果历史竞态留下同资源的多个活动任务，迁移保留最早任务，其余行以
   `task_dedupe_migration_conflict` 失败保留，然后再创建唯一约束。
+- 写入安全迁移新增 `lease_token` 与可空 `completion_key`。旧产物不强行回填或删除；
+  新完成写入才进入唯一键约束，避免迁移猜测历史用户意图。
 
 ## 10. 模块边界
 

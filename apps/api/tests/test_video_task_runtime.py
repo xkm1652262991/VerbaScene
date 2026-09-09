@@ -5,7 +5,7 @@ import unittest
 from unittest.mock import patch
 
 from fastapi import HTTPException
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import sessionmaker
 
 from app.db.session import create_database_engine, initialize_database
@@ -13,6 +13,7 @@ from app.models import Asset, AssetCandidate, GenerationTask, Project, Shot
 from app.platform.tasks.repository import TaskConflictError, TaskRepository
 from app.platform.tasks.types import TaskStatus
 from app.production.video_task_handler import VideoCandidateTaskHandler
+from app.production.video_candidate_persistence import persist_video_candidate_task_result
 from app.production.video_tasks import (
     PROJECT_VIDEO_BATCH_TASK_TYPE,
     create_project_video_batch_task,
@@ -184,6 +185,37 @@ class VideoTaskRuntimeTests(unittest.TestCase):
             self.assertTrue(candidate.uri.startswith("/storage/projects/"))
             stored_path = self.storage_root / candidate.uri.removeprefix("/storage/")
             self.assertEqual(stored_path.read_bytes(), b"async-video")
+
+            replayed = persist_video_candidate_task_result(
+                db,
+                task,
+                ProviderResponse(
+                    status=ProviderStatus.SUCCEEDED,
+                    provider_task_id="remote-video-1",
+                    assets=[
+                        ProviderAsset(
+                            asset_type="video",
+                            uri="unused://duplicate-delivery",
+                            mime_type="video/mp4",
+                        )
+                    ],
+                ),
+            )
+            self.assertEqual(replayed.id, candidate.id)
+            self.assertEqual(
+                db.scalar(
+                    select(func.count(AssetCandidate.id)).where(
+                        AssetCandidate.source_task_id == task_id
+                    )
+                ),
+                1,
+            )
+            self.assertEqual(
+                db.scalar(
+                    select(func.count(Asset.id)).where(Asset.source_task_id == task_id)
+                ),
+                1,
+            )
 
     def test_legacy_queued_video_input_is_frozen_before_first_submit(self):
         provider = AsyncVideoProvider()

@@ -209,6 +209,132 @@ class MiniMaxH3ProviderContractTests(unittest.TestCase):
         self.assertIn(b'name="model"\r\n\r\nminimax-h3-fl2va', body)
         self.assertIn("严格作为视频首帧".encode(), body)
 
+    def test_outgoing_prompt_uses_h3_audio_structure_and_stable_speakers(self):
+        captured: dict[str, bytes] = {}
+
+        def fake_urlopen(request, timeout):
+            _ = timeout
+            captured["body"] = request.data
+            return _FakeResponse(
+                json.dumps({"id": "h3-audio-job", "status": "queued"}).encode()
+            )
+
+        prompt = "\n".join(
+            [
+                (
+                    "生成连续动画英语短剧片段，"
+                    "使用原生英文对白、环境音和动作音效。"
+                ),
+                "镜头1：中景，固定机位。Mia举起红球。",
+                "对白：Mia（开心）说：{Look! A red ball!}；Leo说：{I see it!}",
+                "音效：<小球滚动声>",
+                "镜头2：近景。Mia点头。",
+                "对白：Mia说：{Yes, it is red.}",
+            ]
+        )
+        with (
+            patch.object(settings, "minimax_h3_gateway_base_url", "http://h3.test/v1"),
+            patch.object(settings, "minimax_h3_gateway_api_key", None),
+            patch("app.providers.minimax_h3.urlopen", fake_urlopen),
+        ):
+            response = MiniMaxH3GatewayProvider().submit(
+                ProviderRequest(
+                    project_id="project-id",
+                    task_id="audio-task",
+                    model="auto",
+                    prompt=prompt,
+                    params={"size": "1024x576", "duration_sec": 6},
+                )
+            )
+
+        body = captured["body"].decode("utf-8", errors="ignore")
+        self.assertEqual(response.status, ProviderStatus.QUEUED)
+        self.assertEqual(
+            response.raw_response["request_contract"]["prompt_contract_version"],
+            "h3-native-audio-v1",
+        )
+        self.assertIn("integrated_multimodal_description: [Shot 1]", body)
+        self.assertIn("Mia (S1) says with a 开心 delivery", body)
+        self.assertIn("Leo (S2) says", body)
+        self.assertIn("Mia (S1) says: <d>[English] Yes, it is red.</d>", body)
+        self.assertEqual(body.count("<d>[English] Look! A red ball!</d>"), 1)
+        self.assertIn("Synchronized diegetic sound: 小球滚动声.", body)
+        self.assertIn("Every audible spoken word comes from exactly one scripted <d> block", body)
+        self.assertIn("overall_soundscape: A clean, restrained mix", body)
+        self.assertIn("non_diegetic_music: N/A", body)
+        self.assertNotIn("对白：Mia", body)
+
+    def test_outgoing_prompt_without_dialogue_explicitly_keeps_audio_non_verbal(self):
+        captured: dict[str, bytes] = {}
+
+        def fake_urlopen(request, timeout):
+            _ = timeout
+            captured["body"] = request.data
+            return _FakeResponse(
+                json.dumps({"id": "h3-silent-cast-job", "status": "queued"}).encode()
+            )
+
+        with (
+            patch.object(settings, "minimax_h3_gateway_base_url", "http://h3.test/v1"),
+            patch.object(settings, "minimax_h3_gateway_api_key", None),
+            patch("app.providers.minimax_h3.urlopen", fake_urlopen),
+        ):
+            MiniMaxH3GatewayProvider().submit(
+                ProviderRequest(
+                    project_id="project-id",
+                    task_id="non-verbal-task",
+                    model="auto",
+                    prompt="Two children silently stack wooden blocks in a classroom.",
+                    params={"size": "1024x576", "duration_sec": 4},
+                )
+            )
+
+        body = captured["body"].decode("utf-8", errors="ignore")
+        self.assertIn("soundtrack consists exclusively of non-verbal ambience", body)
+        self.assertIn("non_diegetic_music: N/A", body)
+
+    def test_existing_h3_structure_is_not_nested_or_duplicated(self):
+        captured: dict[str, bytes] = {}
+
+        def fake_urlopen(request, timeout):
+            _ = timeout
+            captured["body"] = request.data
+            return _FakeResponse(
+                json.dumps({"id": "h3-structured-job", "status": "queued"}).encode()
+            )
+
+        structured = "\n\n".join(
+            [
+                (
+                    "integrated_multimodal_description: [Shot 1] Mia (S1) says: "
+                    "<d>[English] Hello.</d>"
+                ),
+                "overall_soundscape: Quiet classroom room tone.",
+                "non_diegetic_music: N/A",
+            ]
+        )
+        with (
+            patch.object(settings, "minimax_h3_gateway_base_url", "http://h3.test/v1"),
+            patch.object(settings, "minimax_h3_gateway_api_key", None),
+            patch("app.providers.minimax_h3.urlopen", fake_urlopen),
+        ):
+            MiniMaxH3GatewayProvider().submit(
+                ProviderRequest(
+                    project_id="project-id",
+                    task_id="structured-task",
+                    model="auto",
+                    prompt=structured,
+                    params={"size": "1024x576", "duration_sec": 4},
+                )
+            )
+
+        body = captured["body"].decode("utf-8", errors="ignore")
+        self.assertEqual(body.count("integrated_multimodal_description:"), 1)
+        self.assertEqual(body.count("overall_soundscape:"), 1)
+        self.assertEqual(body.count("non_diegetic_music:"), 1)
+        self.assertEqual(body.count("<d>[English] Hello.</d>"), 1)
+        self.assertIn("Every audible spoken word comes from exactly one scripted <d> block", body)
+
     def test_auto_routes_text_only_request_to_fl2va(self):
         captured: dict[str, bytes] = {}
 

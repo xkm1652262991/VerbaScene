@@ -5,15 +5,16 @@ from math import ceil
 from typing import Any
 
 from app.agents.camera_language import professional_movement, professional_shot_size
+from app.agents.shot_timing import strip_internal_timing
 from app.agents.style import project_style_prompt_line, strip_project_style
 from app.models import Character, Prop, Scene, Script
 
 
 IMAGE_PROMPT_KEYS = ("shot_storyboard",)
-PROVIDER_AUTO_MIN_DURATION_SEC = 4.0
-PROVIDER_AUTO_EXPECTED_DURATION_SEC = 12.0
-PROVIDER_AUTO_MAX_DURATION_SEC = 15.0
-STRUCTURAL_DENSE_SEGMENT_EXPECTATION_SEC = 8.0
+SEGMENT_MIN_DURATION_SEC = 4
+SEGMENT_MAX_DURATION_SEC = 15
+TARGET_DURATION_TOLERANCE_RATIO = 0.15
+STRUCTURAL_EVENT_COUNT_FLOOR_SEC = 8
 SEGMENT_MIN_INTERNAL_SHOTS = 2
 SEGMENT_MAX_INTERNAL_SHOTS = 4
 
@@ -32,12 +33,16 @@ def build_shot_breakdown_prompt(
 你是儿童动画短剧导演。一次完成“可独立生成的视频片段”拆解、内部镜头节拍和唯一分镜首帧 Prompt。
 
 只输出 JSON：{{"shots": [...]}}。
-项目目标总时长约 {segment_contract["target_duration_sec"]:.0f} 秒；优选生成 {segment_contract["preferred_segment_count"]} 个视频片段，
-合理范围为 {segment_contract["min_segment_count"]}-{segment_contract["max_segment_count"]} 个。
+项目目标总时长约 {segment_contract["target_duration_sec"]:.0f} 秒；全部片段规划总时长必须在
+{segment_contract["total_duration_range"]["min_sec"]:.0f}-{segment_contract["total_duration_range"]["max_sec"]:.0f} 秒之间。
+单个片段总时长必须是 {segment_contract["shot_duration_range"]["min_sec"]:.0f}-{segment_contract["shot_duration_range"]["max_sec"]:.0f} 之间的整数秒。
+片段数量的硬范围为 {segment_contract["min_segment_count"]}-{segment_contract["max_segment_count"]} 个；
+实际数量由剧情事件决定，不存在优选平均片段数。
 scene_id、character_ids、prop_ids 和 dialogue_ids 只能使用给定 id。
 一个 shot 是一次视频模型调用，不是单个摄影镜头，并包含
 {SEGMENT_MIN_INTERNAL_SHOTS}-{SEGMENT_MAX_INTERNAL_SHOTS} 个按剧情顺序发生的内部摄影镜头 beats。
-不得输出、猜测或分配任何 shot 或 beat 的秒数；片段实际时长由视频 Provider 根据完整动作和对白智能决定。
+先识别剧情事件，再根据事件功能、动作复杂度、对白承载量和情绪变化为每个 shot 分配一个总时长；
+不得先计算平均秒数再机械切片。不得为任何 beat 分配秒数。
 
 分片规则（最高优先级）：
 - 普通景别变化、机位变化、对话轮次、动作与反应不得单独创建 2-3 秒 shot，应写入同一 shot 的多个 beats。
@@ -54,6 +59,7 @@ scene_id、character_ids、prop_ids 和 dialogue_ids 只能使用给定 id。
 
 每个 shot 必须包含：
 - shot_no、description、camera_shot、camera_movement
+- duration_sec：Agent 规划的片段总时长，只能是整数秒
 - scene_id、character_ids、prop_ids、dialogue_ids
 - video_prompt（允许空字符串）、generation_mode（固定 image_to_video）
 - shot_card
@@ -63,6 +69,7 @@ shot_card 保存视频片段和审核需要的结构：
 - schema_version（固定 3）
 - source_scene_no
 - story_purpose、emotional_intent
+- duration_rationale：说明该事件为什么需要这个片段总时长，不得拆成 beat 时间表
 - camera: shot_size、angle、movement
 - action: start_state、main_action、end_state
 - frame_plan: first_frame、key_frame、last_frame
@@ -191,6 +198,9 @@ def _normalize_shot(
         allowed_dialogues=allowed_dialogues,
         fallback_dialogue_ids=raw_dialogue_ids,
     )
+    if not shot_card["duration_rationale"]:
+        shot_card["duration_rationale"] = _optional_text(raw.get("duration_rationale"))
+    duration_sec = _duration_seconds(raw.get("duration_sec"))
     dialogue_ids = list(
         dict.fromkeys(
             dialogue_id
@@ -211,22 +221,18 @@ def _normalize_shot(
         "description": description,
         "camera_shot": professional_shot_size(_text(raw.get("camera_shot")) or "中景"),
         "camera_movement": professional_movement(_text(raw.get("camera_movement")) or "固定机位"),
-        "duration_sec": None,
+        "duration_sec": duration_sec,
         "scene_id": scene_id,
         "character_ids": character_ids,
         "prop_ids": prop_ids,
         "dialogue_ids": dialogue_ids,
         "shot_card": {
             **shot_card,
-            "segment_plan": {
-                "duration_mode": "provider_auto",
-                "expected_duration_range": {
-                    "min_sec": PROVIDER_AUTO_MIN_DURATION_SEC,
-                    "max_sec": PROVIDER_AUTO_MAX_DURATION_SEC,
-                },
-                "actual_duration_sec": None,
-                "internal_shot_count": len(shot_card["beats"]),
-            },
+            "segment_plan": _segment_plan(
+                duration_sec,
+                duration_rationale=shot_card["duration_rationale"],
+                internal_shot_count=len(shot_card["beats"]),
+            ),
             "image_prompts": image_prompts,
         },
         "image_prompts": image_prompts,
@@ -249,9 +255,9 @@ def _shot_card(
     value = value if isinstance(value, dict) else {}
     action_value = value.get("action") if isinstance(value.get("action"), dict) else {}
     action = {
-        "start_state": _text(action_value.get("start_state")) or description,
-        "main_action": _text(action_value.get("main_action")) or description,
-        "end_state": _text(action_value.get("end_state")) or description,
+        "start_state": strip_internal_timing(action_value.get("start_state")) or description,
+        "main_action": strip_internal_timing(action_value.get("main_action")) or description,
+        "end_state": strip_internal_timing(action_value.get("end_state")) or description,
     }
     frame_value = value.get("frame_plan") if isinstance(value.get("frame_plan"), dict) else {}
     frames = {
@@ -283,6 +289,7 @@ def _shot_card(
         "source_scene_no": value.get("source_scene_no"),
         "story_purpose": _optional_text(value.get("story_purpose")),
         "emotional_intent": _optional_text(value.get("emotional_intent")),
+        "duration_rationale": _optional_text(value.get("duration_rationale")),
         "camera": camera,
         "action": action,
         "frame_plan": frames,
@@ -319,12 +326,12 @@ def _beats(
         beats.append(
             {
                 "beat_id": _text(source.get("beat_id")) or f"beat-{index}",
-                "camera": _text(source.get("camera"))
-                or _text(source.get("camera_language"))
+                "camera": strip_internal_timing(source.get("camera"))
+                or strip_internal_timing(source.get("camera_language"))
                 or "，".join(str(item) for item in fallback_camera.values() if str(item).strip()),
-                "action": _text(source.get("action"))
-                or _text(source.get("description"))
-                or fallback_action,
+                "action": strip_internal_timing(source.get("action"))
+                or strip_internal_timing(source.get("description"))
+                or strip_internal_timing(fallback_action),
                 "dialogue_ids": dialogue_ids,
                 "sound_cues": _string_list(source.get("sound_cues")),
             }
@@ -445,28 +452,74 @@ def _positive_int(value: Any, fallback: int) -> int:
     return parsed if parsed > 0 else fallback
 
 
+def _duration_seconds(value: Any) -> int | None:
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError):
+        return None
+    if parsed <= 0 or not parsed.is_integer():
+        return None
+    return int(parsed)
+
+
+def _segment_plan(
+    duration_sec: int | None,
+    *,
+    duration_rationale: str | None,
+    internal_shot_count: int,
+) -> dict[str, Any]:
+    if duration_sec is None:
+        return {
+            "duration_mode": "provider_auto",
+            "duration_source": "legacy_or_manual",
+            "planned_duration_sec": None,
+            "duration_rationale": duration_rationale,
+            "expected_duration_range": {
+                "min_sec": SEGMENT_MIN_DURATION_SEC,
+                "max_sec": SEGMENT_MAX_DURATION_SEC,
+            },
+            "actual_duration_sec": None,
+            "internal_shot_count": internal_shot_count,
+        }
+    return {
+        "duration_mode": "fixed",
+        "duration_source": "agent",
+        "planned_duration_sec": duration_sec,
+        "duration_rationale": duration_rationale,
+        "expected_duration_range": {
+            "min_sec": SEGMENT_MIN_DURATION_SEC,
+            "max_sec": SEGMENT_MAX_DURATION_SEC,
+        },
+        "actual_duration_sec": None,
+        "internal_shot_count": internal_shot_count,
+    }
+
+
 def segment_planning_contract(target_duration_sec: int | float | Decimal) -> dict[str, Any]:
     try:
         target = max(1.0, float(target_duration_sec))
     except (TypeError, ValueError, InvalidOperation):
         target = 90.0
-    min_count = max(1, ceil(target / PROVIDER_AUTO_MAX_DURATION_SEC))
-    max_count = max(min_count, ceil(target / STRUCTURAL_DENSE_SEGMENT_EXPECTATION_SEC))
-    preferred_count = min(
-        max_count,
-        max(min_count, round(target / PROVIDER_AUTO_EXPECTED_DURATION_SEC)),
-    )
+    tolerance = max(float(SEGMENT_MIN_DURATION_SEC), target * TARGET_DURATION_TOLERANCE_RATIO)
+    min_total = max(float(SEGMENT_MIN_DURATION_SEC), target - tolerance)
+    max_total = max(min_total, target + tolerance)
+    min_count = max(1, ceil(min_total / SEGMENT_MAX_DURATION_SEC))
+    max_count = max(min_count, ceil(max_total / STRUCTURAL_EVENT_COUNT_FLOOR_SEC))
     return {
         "target_duration_sec": target,
-        "duration_mode": "provider_auto",
-        "expected_duration_range": {
-            "min_sec": PROVIDER_AUTO_MIN_DURATION_SEC,
-            "max_sec": PROVIDER_AUTO_MAX_DURATION_SEC,
+        "duration_mode": "fixed",
+        "duration_source": "agent",
+        "shot_duration_range": {
+            "min_sec": SEGMENT_MIN_DURATION_SEC,
+            "max_sec": SEGMENT_MAX_DURATION_SEC,
+        },
+        "total_duration_range": {
+            "min_sec": round(min_total, 2),
+            "max_sec": round(max_total, 2),
         },
         "min_internal_shots": SEGMENT_MIN_INTERNAL_SHOTS,
         "max_internal_shots": SEGMENT_MAX_INTERNAL_SHOTS,
         "min_segment_count": min_count,
-        "preferred_segment_count": preferred_count,
         "max_segment_count": max_count,
     }
 
@@ -479,6 +532,11 @@ def _validate_segment_contract(
     max_internal = int(contract.get("max_internal_shots", SEGMENT_MAX_INTERNAL_SHOTS))
     min_count = int(contract.get("min_segment_count", 1))
     max_count = int(contract.get("max_segment_count", max(min_count, len(shots))))
+    shot_range = contract.get("shot_duration_range") if isinstance(contract.get("shot_duration_range"), dict) else {}
+    requires_agent_duration = contract.get("duration_source") == "agent" or bool(shot_range)
+    min_duration = float(shot_range.get("min_sec", SEGMENT_MIN_DURATION_SEC))
+    max_duration = float(shot_range.get("max_sec", SEGMENT_MAX_DURATION_SEC))
+    planned_total = 0.0
     for index, shot in enumerate(shots, start=1):
         beats = (shot.get("shot_card") or {}).get("beats")
         beat_count = len(beats) if isinstance(beats, list) else 0
@@ -486,7 +544,28 @@ def _validate_segment_contract(
             raise ValueError(
                 f"片段 {index} 包含 {beat_count} 个内部镜头，不符合 {min_internal}-{max_internal} 个合同"
             )
+        if requires_agent_duration:
+            duration_sec = shot.get("duration_sec")
+            if duration_sec is None:
+                raise ValueError(f"片段 {index} 缺少 Agent 规划的总时长")
+            card = shot.get("shot_card") if isinstance(shot.get("shot_card"), dict) else {}
+            if not _optional_text(card.get("duration_rationale")):
+                raise ValueError(f"片段 {index} 缺少基于剧情事件的时长依据")
+            duration = float(duration_sec)
+            if duration < min_duration or duration > max_duration:
+                raise ValueError(
+                    f"片段 {index} 总时长 {duration:g} 秒不符合 {min_duration:g}-{max_duration:g} 秒合同"
+                )
+            planned_total += duration
     if len(shots) < min_count or len(shots) > max_count:
         raise ValueError(
             f"片段数量 {len(shots)} 不符合目标时长要求的 {min_count}-{max_count} 个范围"
         )
+    if requires_agent_duration:
+        total_range = contract.get("total_duration_range") if isinstance(contract.get("total_duration_range"), dict) else {}
+        min_total = float(total_range.get("min_sec", 0))
+        max_total = float(total_range.get("max_sec", float("inf")))
+        if planned_total < min_total or planned_total > max_total:
+            raise ValueError(
+                f"片段规划总时长 {planned_total:g} 秒不符合整集 {min_total:g}-{max_total:g} 秒合同"
+            )

@@ -12,7 +12,7 @@ from app.agents.script_contracts import SCRIPT_QUALITY_PIPELINE_VERSION
 from app.agents.script_pipeline import ScriptPipelineFailure
 from app.db.session import create_database_engine, initialize_database
 from app.main import app
-from app.models import AgentConfig
+from app.models import AgentConfig, GenerationTask
 from app.platform.tasks.repository import TaskRepository
 from app.platform.tasks.runtime import LocalTaskRuntime
 from app.platform.tasks.types import TaskExecutionError
@@ -33,10 +33,39 @@ class RecordingMockLLMProvider(MockLLMProvider):
     def __init__(self) -> None:
         super().__init__()
         self.phases: list[str] = []
+        self.requests: list = []
 
     def submit(self, request):
+        self.requests.append(request)
         self.phases.append(str(request.metadata.get("phase") or ""))
         return super().submit(request)
+
+
+class CancelDuringStreamProvider(RecordingMockLLMProvider):
+    def __init__(self, session_factory) -> None:
+        super().__init__()
+        self.session_factory = session_factory
+
+    def submit_streaming(self, request, *, on_progress=None):
+        self.requests.append(request)
+        self.phases.append(str(request.metadata.get("phase") or ""))
+        task_id = request.task_id.split(":", 1)[0]
+        with self.session_factory() as db:
+            task = db.get(GenerationTask, task_id)
+            TaskRepository().request_cancel(db, task)
+            db.commit()
+        if on_progress is not None:
+            on_progress(
+                {
+                    "event": "stream_delta",
+                    "submission_state": SubmissionState.ACCEPTED.value,
+                    "elapsed_sec": 1.0,
+                    "chunk_count": 1,
+                    "content_chars": 0,
+                    "reasoning_chars": 24,
+                }
+            )
+        raise AssertionError("stream cancellation should abort before this line")
 
 
 class ReviewUnavailableProvider(RecordingMockLLMProvider):
@@ -492,6 +521,13 @@ class ScriptGenerationQueueTests(unittest.TestCase):
             self.assertEqual(completed.raw_response["checkpoint"]["review"], {"issues": []})
             self.assertFalse(completed.raw_response["checkpoint"]["review_available"])
             self.assertFalse(completed.result_payload["patch_applied"])
+            self.assertTrue(provider.requests)
+            self.assertTrue(
+                all(
+                    request.params.get("response_format") == {"type": "json_object"}
+                    for request in provider.requests
+                )
+            )
             self.assertIn(
                 "keep_valid_draft",
                 {
@@ -499,6 +535,22 @@ class ScriptGenerationQueueTests(unittest.TestCase):
                     for item in completed.raw_response["checkpoint"]["pipeline_trace"]["fallbacks"]
                 },
             )
+
+    def test_running_stream_observes_cancel_before_full_response(self):
+        provider = CancelDuringStreamProvider(self.session_factory)
+        with self.session_factory() as db:
+            project = self._project(db)
+            with patch("app.scripts.service.provider_registry.get", return_value=provider):
+                task = create_script_generation_task(db, project.id)
+                with self.assertRaises(TaskExecutionError) as raised:
+                    execute_script_generation_task(db, task.id)
+
+            self.assertEqual(raised.exception.code, "task_cancelled")
+            runtime = LocalTaskRuntime(session_factory=self.session_factory)
+            runtime._handle_execution_error(task.id, "test-worker", raised.exception)
+            db.refresh(task)
+            self.assertEqual(task.status, "cancelled")
+            self.assertEqual(provider.phases, ["story_blueprint"])
 
     def test_invalid_patch_is_rejected_and_marks_draft_for_attention(self):
         provider = InvalidPatchProvider()

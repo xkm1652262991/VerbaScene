@@ -5,11 +5,18 @@ from pathlib import Path
 from unittest.mock import patch
 
 from app.core.config import settings
-from app.providers.dashscope_image import DashScopeImageProvider, _api_url
+from app.providers.dashscope_image import (
+    DashScopeImageProvider,
+    _api_url,
+    _uses_qwen_sync_protocol,
+)
 from app.providers.types import ProviderRequest, ProviderStatus
 
 
 class DashScopeImageProviderTests(unittest.TestCase):
+    def test_qwen_image_3_0_uses_synchronous_protocol(self):
+        self.assertTrue(_uses_qwen_sync_protocol("qwen-image-3.0"))
+
     def test_qwen_image_2_0_uses_synchronous_multimodal_contract(self):
         captured: list[dict] = []
 

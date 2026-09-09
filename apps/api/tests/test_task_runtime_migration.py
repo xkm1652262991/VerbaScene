@@ -77,10 +77,22 @@ class TaskRuntimeMigrationTests(unittest.TestCase):
                     "active_dedupe_key",
                     "available_at",
                     "lease_owner",
+                    "lease_token",
                     "lease_expires_at",
                     "heartbeat_at",
                     "cancel_requested_at",
                 }.issubset(columns)
+            )
+            self.assertIn(
+                "completion_key",
+                {column["name"] for column in inspect(engine).get_columns("assets")},
+            )
+            self.assertIn(
+                "completion_key",
+                {
+                    column["name"]
+                    for column in inspect(engine).get_columns("asset_candidates")
+                },
             )
             with engine.connect() as connection:
                 tasks = connection.execute(

@@ -2,7 +2,7 @@
 
 ## 1. 定位与边界
 
-分镜导演 Agent 负责把一份冻结的剧本和资产上下文整理成可编辑的视频片段方案。这里的 `Shot` 是一次视频模型调用承载的连续叙事片段；`shot_card.beats` 是该片段内部按顺序发生的摄影镜头节拍。两者不能混为一层，也不为每个 beat 分配秒数。
+分镜导演 Agent 负责把一份冻结的剧本和资产上下文整理成可编辑的视频片段方案。这里的 `Shot` 是一次视频模型调用承载的连续叙事片段；`shot_card.beats` 是该片段内部按顺序发生的摄影镜头节拍。两者不能混为一层。Agent 按剧情事件为每个 Shot 规划一个总时长，但不为 beat 分配秒数或时间区间。
 
 Agent 的终点是“可编辑的新 Shot 批次 + 规范化导演报告”。它可以发现资产缺口、提出镜头方案并做一次受限修订，但不能生成或采用资产、提交视频、删除媒体、修改资产卡，也不能替代后端决定引用版本、编译最终视频 Prompt 或切换数据库批次。
 
@@ -37,7 +37,9 @@ Agent 的终点是“可编辑的新 Shot 批次 + 规范化导演报告”。�
 
 ### 3.2 `ShotDraft`
 
-包含完整 `shots` 数组。每个 Shot 必须使用快照内的实体 ID 和 Dialogue ID，包含连续叙事、2–4 个 beats、单张分镜图主体 Prompt，以及后续确定性编译所需的 Shot Card。
+包含完整 `shots` 数组。每个 Shot 必须使用快照内的实体 ID 和 Dialogue ID，包含连续叙事、片段总时长、时长依据、2–4 个有序 beats、单张分镜图主体 Prompt，以及后续确定性编译所需的 Shot Card。
+
+时长规划遵循事件预算，而不是平均切片：建立信息、短反应和简单动作使用较短片段；完整对白、动作转折、失败或情绪兑现获得更长片段。所有 Shot 的规划时长总和必须落在项目目标时长的允许浮动范围内。beat 只表达“先发生什么、接着什么、最后如何收束”，不得出现 `0.0-2.0 秒`、`第 3 秒`等内部时间码。
 
 ### 3.3 `ReflectionReport`
 
@@ -55,7 +57,7 @@ coverage / continuity / dialogue / cinematography / asset_feasibility / producti
 
 ### 3.5 `ContractReport`
 
-后端确定性校验实体引用、Dialogue 唯一绑定、分段数量、内部 beats、场次来源和必要结构。报告包含 `errors`、`warnings`、未解决问题和最终 `quality_gate`：
+后端确定性校验实体引用、Dialogue 唯一绑定、片段总时长、整集时长预算、内部 beats、场次来源和必要结构。报告包含 `errors`、`warnings`、未解决问题和最终 `quality_gate`：
 
 - `pass`：审稿可用且没有未解决的必须修复项；
 - `needs_attention`：草案合同有效，但修订失败、Patch 被拒绝或仍有内容问题；

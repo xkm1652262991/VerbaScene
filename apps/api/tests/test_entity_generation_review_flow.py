@@ -19,8 +19,10 @@ class _EntityProvider:
 
     def __init__(self, payload: dict):
         self.payload = payload
+        self.request = None
 
-    def submit(self, _request):
+    def submit(self, request):
+        self.request = request
         return ProviderResponse(
             status=ProviderStatus.SUCCEEDED,
             provider_task_id="provider-task-1",
@@ -132,6 +134,10 @@ class EntityGenerationReviewFlowTests(unittest.TestCase):
                     characters, scenes, props, task = generate_entities(db, project.id)
 
                 self.assertEqual(task.status, "succeeded")
+                self.assertEqual(
+                    provider.request.params["response_format"],
+                    {"type": "json_object"},
+                )
                 self.assertEqual(len(characters), 1)
                 self.assertEqual(len(scenes), 1)
                 self.assertEqual(len(props), 1)

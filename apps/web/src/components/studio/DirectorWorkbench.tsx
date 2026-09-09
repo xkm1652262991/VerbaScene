@@ -1,4 +1,4 @@
-import { type DragEvent, useEffect, useMemo, useState } from "react";
+import { type DragEvent, type ReactNode, useEffect, useMemo, useState } from "react";
 
 import type { ImageProviderProfile, ProviderDescriptor } from "../../services/apiClient";
 import type {
@@ -17,9 +17,14 @@ import { generationTaskStatusLabel, isGenerationTaskActive } from "../../utils/g
 
 type AssetFilter = "character" | "scene" | "prop" | "material";
 type DurationMode = "provider_auto" | "fixed";
+type MediaKind = "video" | "image";
 type PreviewChoice =
   | { kind: "asset"; id: string }
   | { kind: "candidate"; id: string }
+  | null;
+type MediaDeleteTarget =
+  | { kind: "asset"; item: Asset }
+  | { kind: "candidate"; item: AssetCandidate }
   | null;
 
 export type ShotDraftPayload = {
@@ -47,6 +52,8 @@ type DirectorWorkbenchProps = {
   onCancelTask: (task: GenerationTask) => void;
   onCompilePrompt: () => void;
   onCreateShot: () => void;
+  onDeleteAsset: (asset: Asset) => Promise<boolean>;
+  onDeleteCandidate: (candidate: AssetCandidate) => Promise<boolean>;
   onDeleteShot: (shot: Shot) => void;
   onExtractFrame: (asset: Asset) => void;
   onGenerateImage: () => void;
@@ -91,6 +98,8 @@ export function DirectorWorkbench({
   onCancelTask,
   onCompilePrompt,
   onCreateShot,
+  onDeleteAsset,
+  onDeleteCandidate,
   onDeleteShot,
   onExtractFrame,
   onGenerateImage,
@@ -126,16 +135,20 @@ export function DirectorWorkbench({
   const [draftDescription, setDraftDescription] = useState(selectedShot.description);
   const [draftCard, setDraftCard] = useState<Record<string, unknown>>(cloneCard(selectedShot.shot_card));
   const [draftPrompt, setDraftPrompt] = useState(selectedShot.video_prompt ?? "");
-  const [durationMode, setDurationMode] = useState<DurationMode>(
-    selectedVideoProvider?.smart_duration ? "provider_auto" : "fixed",
-  );
+  const [durationMode, setDurationMode] = useState<DurationMode>(() => (
+    defaultDurationMode(selectedShot, selectedVideoProvider)
+  ));
   const [fixedDuration, setFixedDuration] = useState(
-    Number(selectedShot.duration_sec) || selectedVideoProvider?.min_duration_sec || 5,
+    plannedShotDuration(selectedShot)
+      ?? (Number(selectedShot.duration_sec) || selectedVideoProvider?.min_duration_sec || 5),
   );
   const [draftDialogues, setDraftDialogues] = useState<Dialogue[]>([]);
   const [dirty, setDirty] = useState(false);
   const [pendingShotId, setPendingShotId] = useState("");
   const [previewChoice, setPreviewChoice] = useState<PreviewChoice>(null);
+  const [mediaKind, setMediaKind] = useState<MediaKind>("video");
+  const [deleteTarget, setDeleteTarget] = useState<MediaDeleteTarget>(null);
+  const [deletingMediaId, setDeletingMediaId] = useState("");
   const [draggedShotId, setDraggedShotId] = useState("");
 
   const entityMap = useMemo(() => buildEntityMap(entities), [entities]);
@@ -169,14 +182,20 @@ export function DirectorWorkbench({
     setIsEditing(false);
     setPendingShotId("");
     setPreviewChoice(null);
+    setMediaKind("video");
+    setDeleteTarget(null);
+    setDeletingMediaId("");
     setReferencePickerAssetId("");
     setReferencePickerEntityId("");
     setReferencePickerSelectionId("");
   }, [selectedShot.id, selectedShot.updated_at]);
 
   useEffect(() => {
-    setDurationMode(selectedVideoProvider?.smart_duration ? "provider_auto" : "fixed");
-    setFixedDuration(Number(selectedShot.duration_sec) || selectedVideoProvider?.min_duration_sec || 5);
+    setDurationMode(defaultDurationMode(selectedShot, selectedVideoProvider));
+    setFixedDuration(
+      plannedShotDuration(selectedShot)
+        ?? (Number(selectedShot.duration_sec) || selectedVideoProvider?.min_duration_sec || 5),
+    );
   }, [
     selectedShot.id,
     selectedShot.duration_sec,
@@ -213,8 +232,13 @@ export function DirectorWorkbench({
     ? imageAssets.find((asset) => asset.id === explicitFirstFrameId) ?? null
     : null;
   const hasExplicitFirstFrame = Boolean(explicitFirstFrameId);
-  const pendingCandidates = candidates
-    .filter((candidate) => candidate.entity_type === "shot" && candidate.entity_id === selectedShot.id && candidate.status === "pending_review")
+  const shotCandidates = candidates
+    .filter((candidate) => (
+      candidate.entity_type === "shot"
+      && candidate.entity_id === selectedShot.id
+      && ["video", "image"].includes(candidate.asset_type)
+      && ["pending_review", "rejected"].includes(candidate.status)
+    ))
     .sort((left, right) => right.version - left.version);
   const videoTaskByShotId = useMemo(() => {
     const result = new Map<string, GenerationTask>();
@@ -235,9 +259,19 @@ export function DirectorWorkbench({
     ? selectedShotAssets.find((asset) => asset.id === previewChoice.id) ?? null
     : null;
   const previewCandidate = previewChoice?.kind === "candidate"
-    ? pendingCandidates.find((candidate) => candidate.id === previewChoice.id) ?? null
+    ? shotCandidates.find((candidate) => candidate.id === previewChoice.id) ?? null
     : null;
   const visibleMedia = previewCandidate ?? previewAsset ?? currentVideo ?? currentImage;
+  const visibleAsset = previewCandidate ? null : previewAsset ?? currentVideo ?? currentImage;
+  const visibleMediaStatus = mediaStatusLabel(visibleMedia);
+  const versionAssets = selectedShotAssets.filter((asset) => asset.asset_type === mediaKind);
+  const versionCandidates = shotCandidates.filter((candidate) => candidate.asset_type === mediaKind);
+  const pendingVersionCandidates = versionCandidates.filter((candidate) => candidate.status === "pending_review");
+  const rejectedVersionCandidates = versionCandidates.filter((candidate) => candidate.status === "rejected");
+  const videoVersionCount = selectedShotAssets.filter((asset) => asset.asset_type === "video").length
+    + shotCandidates.filter((candidate) => candidate.asset_type === "video").length;
+  const imageVersionCount = selectedShotAssets.filter((asset) => asset.asset_type === "image").length
+    + shotCandidates.filter((candidate) => candidate.asset_type === "image").length;
   const beats = shotBeats(draftCard);
   const usesSmartDuration = Boolean(selectedVideoProvider?.smart_duration) && durationMode === "provider_auto";
   const draftDuration = usesSmartDuration ? 0 : Math.max(0, Number(fixedDuration) || 0);
@@ -411,6 +445,44 @@ export function DirectorWorkbench({
     ids.splice(targetIndex, 0, moved);
     setDraggedShotId("");
     onReorderShots(ids);
+  }
+
+  function showMediaKind(kind: MediaKind) {
+    setMediaKind(kind);
+    const currentAsset = selectedShotAssets.find((asset) => asset.asset_type === kind && asset.is_selected);
+    const pendingCandidate = shotCandidates.find((candidate) => (
+      candidate.asset_type === kind && candidate.status === "pending_review"
+    ));
+    setPreviewChoice(
+      currentAsset
+        ? { kind: "asset", id: currentAsset.id }
+        : pendingCandidate
+          ? { kind: "candidate", id: pendingCandidate.id }
+          : null,
+    );
+  }
+
+  function showAsset(asset: Asset) {
+    setMediaKind(asset.asset_type === "video" ? "video" : "image");
+    setPreviewChoice({ kind: "asset", id: asset.id });
+  }
+
+  function showCandidate(candidate: AssetCandidate) {
+    setMediaKind(candidate.asset_type === "video" ? "video" : "image");
+    setPreviewChoice({ kind: "candidate", id: candidate.id });
+  }
+
+  async function confirmMediaDeletion() {
+    if (!deleteTarget || deletingMediaId) return;
+    const targetId = deleteTarget.item.id;
+    setDeletingMediaId(targetId);
+    const deleted = deleteTarget.kind === "asset"
+      ? await onDeleteAsset(deleteTarget.item)
+      : await onDeleteCandidate(deleteTarget.item);
+    setDeletingMediaId("");
+    if (!deleted) return;
+    if (previewChoice?.id === targetId) setPreviewChoice(null);
+    setDeleteTarget(null);
   }
 
   return (
@@ -636,7 +708,7 @@ export function DirectorWorkbench({
 
       <aside className="director-preview">
         <header>
-          <div><span>PREVIEW</span><h2>视频预览</h2></div>
+          <div><span>PREVIEW</span><h2>片段预览</h2></div>
           <span className="director-model-badge">{selectedVideoProvider?.model ?? "视频模型未配置"}</span>
         </header>
         {shotDirectionTask && shotDirectionTask.status !== "succeeded" ? (
@@ -690,128 +762,197 @@ export function DirectorWorkbench({
             title="视频截帧任务"
           />
         ) : null}
-        <div className="director-preview-canvas">
-          {visibleMedia ? <MediaPreview media={visibleMedia} /> : <div className="director-empty">尚无首帧或视频</div>}
-          <div className="director-preview-status">
-            <span>{
-              previewCandidate
-                ? "待采用候选"
-                : previewAsset
-                  ? `${previewAsset.is_selected ? "当前" : "历史"}${previewAsset.asset_type === "video" ? "视频" : "首帧"} v${previewAsset.version}`
-                  : currentVideo
-                    ? `当前视频 v${currentVideo.version}`
-                    : currentImage
-                      ? `当前首帧 v${currentImage.version}`
-                      : "未生成"
-            }</span>
+        <section className="director-current-output">
+          <div className="director-preview-canvas">
+            {visibleMedia ? <MediaPreview media={visibleMedia} /> : <div className="director-empty">当前片段还没有可预览媒体</div>}
+            <div className="director-preview-status"><span>{visibleMediaStatus}</span></div>
           </div>
-        </div>
-        <div className="director-preview-primary-actions">
-          <button className="secondary-button" disabled={selectedShotImageTaskActive || actionBusy} onClick={onGenerateImage} type="button">
-            {selectedShotImageTaskActive ? "首帧生成中" : currentImage ? "重生成首帧" : "生成首帧"}
-          </button>
-          <button
-            className="secondary-button"
-            disabled={!currentImage && !hasExplicitFirstFrame}
-            onClick={() => onSetFirstFrameReference(hasExplicitFirstFrame ? null : currentImage?.id ?? null)}
-            type="button"
-          >
-            {hasExplicitFirstFrame ? "取消使用首帧" : "使用首帧"}
-          </button>
-          <button
-            className="primary-button"
-            disabled={providerDurationExceeded || selectedShotTaskActive || actionBusy}
-            onClick={() => onGenerateVideo(
-              draftPrompt,
-              usesSmartDuration ? "provider_auto" : "fixed",
-              usesSmartDuration ? null : draftDuration,
-            )}
-            title={providerDurationExceeded ? "当前模型不支持这个片段总时长，请切换视频模型或调整片段方案" : undefined}
-            type="button"
-          >
-            {selectedShotTaskActive ? "视频生成中" : "生成视频"}
-          </button>
-        </div>
-        <p className="director-first-frame-mode">
-          {hasExplicitFirstFrame
-            ? `视频会使用已明确选择的首帧${explicitFirstFrame ? ` v${explicitFirstFrame.version}` : ""}。`
-            : "默认不使用首帧；生成首帧不会自动改变视频输入。"}
-        </p>
-        <details className="director-duration-settings">
-          <summary>时长 · {usesSmartDuration ? "智能选择" : `${formatSeconds(draftDuration)} 秒`}</summary>
-          <div>
-            <label>
-              <span>模式</span>
-              <select
-                onChange={(event) => setDurationMode(event.target.value as DurationMode)}
-                value={durationMode}
-              >
-                {selectedVideoProvider?.smart_duration ? <option value="provider_auto">智能时长（默认）</option> : null}
-                <option value="fixed">固定时长</option>
-              </select>
-            </label>
-            {durationMode === "fixed" ? (
+          <div className="director-output-summary">
+            <div>
+              <strong>{visibleMedia ? `${mediaTypeLabel(visibleMedia.asset_type)} v${visibleMedia.version}` : "尚未生成"}</strong>
+              <span>{visibleMedia ? mediaMetadata(visibleMedia) : "生成首帧或视频后会在这里集中管理版本"}</span>
+            </div>
+            {visibleMedia ? <em className={`status-${mediaStatusTone(visibleMedia)}`}>{visibleMediaStatus}</em> : null}
+          </div>
+
+          {previewCandidate ? (
+            <div className="director-media-context-actions">
+              <button className="danger-button" disabled={actionBusy} onClick={() => setDeleteTarget({ kind: "candidate", item: previewCandidate })} type="button">删除候选</button>
+              {previewCandidate.status === "pending_review" ? (
+                <>
+                  <button className="secondary-button" disabled={actionBusy} onClick={() => onReject(previewCandidate)} type="button">拒绝</button>
+                  <button className="primary-button" disabled={actionBusy} onClick={() => onAdopt(previewCandidate)} type="button">采用此版本</button>
+                </>
+              ) : null}
+            </div>
+          ) : null}
+
+          {visibleAsset ? (
+            <div className="director-media-context-actions">
+              {visibleAsset.asset_type === "video" ? (
+                <>
+                  <a download href={visibleAsset.uri}>下载</a>
+                  <button disabled={selectedShotFrameTaskActive || actionBusy} onClick={() => onExtractFrame(visibleAsset)} type="button">
+                    {selectedShotFrameTaskActive ? "截帧中" : "截帧"}
+                  </button>
+                  <button disabled={selectedShotTaskActive || actionBusy} onClick={() => onLocalRegenerate(visibleAsset)} type="button">
+                    {selectedShotTaskActive ? "生成中" : "基于此版重生成"}
+                  </button>
+                </>
+              ) : (
+                <button
+                  disabled={actionBusy || (visibleAsset.status !== "approved" && explicitFirstFrameId !== visibleAsset.id)}
+                  onClick={() => onSetFirstFrameReference(explicitFirstFrameId === visibleAsset.id ? null : visibleAsset.id)}
+                  type="button"
+                >
+                  {explicitFirstFrameId === visibleAsset.id ? "取消首帧输入" : "用作视频首帧"}
+                </button>
+              )}
+              {!visibleAsset.is_selected ? (
+                <button className="secondary-button" disabled={actionBusy} onClick={() => onSelectAsset(visibleAsset)} type="button">设为当前</button>
+              ) : null}
+              <button className="danger-button" disabled={actionBusy} onClick={() => setDeleteTarget({ kind: "asset", item: visibleAsset })} type="button">删除版本</button>
+            </div>
+          ) : null}
+        </section>
+
+        <section className="director-generation-controls">
+          <header>
+            <div><strong>生成设置</strong><span>生成新候选，不覆盖当前版本</span></div>
+            <em>{usesSmartDuration ? "智能时长" : `${formatSeconds(draftDuration)} 秒`}</em>
+          </header>
+          <div className="director-preview-primary-actions">
+            <button className="secondary-button" disabled={selectedShotImageTaskActive || actionBusy} onClick={onGenerateImage} type="button">
+              {selectedShotImageTaskActive ? "首帧生成中" : currentImage ? "生成新首帧" : "生成首帧"}
+            </button>
+            <button
+              className="primary-button"
+              disabled={providerDurationExceeded || selectedShotTaskActive || actionBusy}
+              onClick={() => onGenerateVideo(
+                draftPrompt,
+                usesSmartDuration ? "provider_auto" : "fixed",
+                usesSmartDuration ? null : draftDuration,
+              )}
+              title={providerDurationExceeded ? "当前模型不支持这个片段总时长，请切换视频模型或调整片段方案" : undefined}
+              type="button"
+            >
+              {selectedShotTaskActive ? "视频生成中" : currentVideo ? "生成新视频" : "生成视频"}
+            </button>
+          </div>
+          <div className="director-first-frame-setting">
+            <div>
+              <strong>首帧输入</strong>
+              <span>{hasExplicitFirstFrame ? `已启用 v${explicitFirstFrame?.version ?? "?"}` : "关闭（默认）"}</span>
+            </div>
+            <button
+              className="secondary-button"
+              disabled={actionBusy || (!hasExplicitFirstFrame && (!currentImage || currentImage.status !== "approved"))}
+              onClick={() => onSetFirstFrameReference(hasExplicitFirstFrame ? null : currentImage?.id ?? null)}
+              type="button"
+            >
+              {hasExplicitFirstFrame ? "取消使用" : "使用当前首帧"}
+            </button>
+          </div>
+          <details className="director-duration-settings">
+            <summary>调整视频时长</summary>
+            <div>
               <label>
-                <span>秒数</span>
-                <input
-                  max={providerDurationLimit ?? 30}
-                  min={providerDurationMinimum ?? 1}
-                  onChange={(event) => setFixedDuration(Number(event.target.value))}
-                  step="1"
-                  type="number"
-                  value={fixedDuration}
-                />
+                <span>模式</span>
+                <select onChange={(event) => setDurationMode(event.target.value as DurationMode)} value={durationMode}>
+                  {selectedVideoProvider?.smart_duration ? <option value="provider_auto">智能时长</option> : null}
+                  <option value="fixed">固定时长</option>
+                </select>
               </label>
+              {durationMode === "fixed" ? (
+                <label>
+                  <span>秒数</span>
+                  <input
+                    max={providerDurationLimit ?? 30}
+                    min={providerDurationMinimum ?? 1}
+                    onChange={(event) => setFixedDuration(Number(event.target.value))}
+                    step="1"
+                    type="number"
+                    value={fixedDuration}
+                  />
+                </label>
+              ) : null}
+            </div>
+          </details>
+          {usesSmartDuration ? <p>模型会按完整动作与对白决定时长，采用后以实际秒数计费和合成。</p> : null}
+          {providerDurationExceeded ? (
+            <p className="director-duration-warning">
+              固定时长 {formatSeconds(draftDuration)} 秒不符合 {selectedVideoProvider?.model ?? "视频模型"}
+              {providerDurationMinimum !== null && providerDurationLimit !== null
+                ? ` 的 ${formatSeconds(providerDurationMinimum)}-${formatSeconds(providerDurationLimit)} 秒范围。`
+                : " 的时长范围。"}
+              系统不会自动截断。
+            </p>
+          ) : null}
+        </section>
+
+        <section className="director-version-manager">
+          <header>
+            <div><strong>版本管理</strong><span>当前片段的候选与正式版本</span></div>
+            <em>{videoVersionCount + imageVersionCount}</em>
+          </header>
+          <nav aria-label="媒体版本类型" className="director-version-tabs">
+            <button aria-pressed={mediaKind === "video"} className={mediaKind === "video" ? "active" : ""} onClick={() => showMediaKind("video")} type="button">
+              视频 <span>{videoVersionCount}</span>
+            </button>
+            <button aria-pressed={mediaKind === "image"} className={mediaKind === "image" ? "active" : ""} onClick={() => showMediaKind("image")} type="button">
+              首帧 <span>{imageVersionCount}</span>
+            </button>
+          </nav>
+          <div className="director-version-groups">
+            {pendingVersionCandidates.length ? (
+              <VersionGroup title="待采用" count={pendingVersionCandidates.length}>
+                {pendingVersionCandidates.map((candidate) => (
+                  <MediaVersionRow
+                    active={previewChoice?.kind === "candidate" && previewChoice.id === candidate.id}
+                    key={candidate.id}
+                    media={candidate}
+                    onDelete={() => setDeleteTarget({ kind: "candidate", item: candidate })}
+                    onOpen={() => showCandidate(candidate)}
+                    status="待采用"
+                  />
+                ))}
+              </VersionGroup>
             ) : null}
-          </div>
-        </details>
-        {usesSmartDuration ? (
-          <p className="director-first-frame-mode">
-            智能时长已开启：模型会按完整动作和对白决定片段长度，生成后按实际秒数计费和合成。
-          </p>
-        ) : null}
-        {providerDurationExceeded ? (
-          <p className="director-duration-warning">
-            固定时长 {formatSeconds(draftDuration)} 秒不符合 {selectedVideoProvider?.model ?? "视频模型"}
-            {providerDurationMinimum !== null && providerDurationLimit !== null
-              ? ` 的 ${formatSeconds(providerDurationMinimum)}-${formatSeconds(providerDurationLimit)} 秒范围。`
-              : " 的时长范围。"}
-            系统不会自动截断。
-          </p>
-        ) : null}
-        {previewCandidate ? (
-          <div className="director-candidate-actions">
-            <button className="secondary-button" onClick={() => onReject(previewCandidate)} type="button">拒绝</button>
-            <button className="primary-button" onClick={() => onAdopt(previewCandidate)} type="button">采用此版本</button>
-          </div>
-        ) : null}
-        {currentVideo ? (
-          <div className="director-preview-tools">
-            <a download href={currentVideo.uri}>下载</a>
-            <button disabled={selectedShotFrameTaskActive || actionBusy} onClick={() => onExtractFrame(currentVideo)} type="button">
-              {selectedShotFrameTaskActive ? "截帧中" : "截帧"}
-            </button>
-            <button disabled={selectedShotTaskActive || actionBusy} onClick={() => onLocalRegenerate(currentVideo)} type="button">
-              {selectedShotTaskActive ? "生成中" : "重新生成本片段"}
-            </button>
-          </div>
-        ) : null}
-        <section className="director-version-strip">
-          <header><strong>候选与版本</strong><span>{pendingCandidates.length + selectedShotAssets.length}</span></header>
-          <div>
-            {pendingCandidates.map((candidate) => (
-              <button className={previewChoice?.kind === "candidate" && previewChoice.id === candidate.id ? "active pending" : "pending"} key={candidate.id} onClick={() => setPreviewChoice({ kind: "candidate", id: candidate.id })} type="button">
-                <MediaThumbnail media={candidate} />
-                <span>候选 v{candidate.version}</span>
-              </button>
-            ))}
-            {selectedShotAssets.map((asset) => (
-              <button className={previewChoice?.kind === "asset" && previewChoice.id === asset.id ? "active" : asset.is_selected ? "current" : ""} key={asset.id} onClick={() => setPreviewChoice({ kind: "asset", id: asset.id })} type="button">
-                <MediaThumbnail media={asset} />
-                <span>{asset.asset_type === "video" ? "视频" : "首帧"} v{asset.version}</span>
-                {!asset.is_selected ? <small onClick={(event) => { event.stopPropagation(); onSelectAsset(asset); }}>设为当前</small> : null}
-              </button>
-            ))}
+            {versionAssets.length ? (
+              <VersionGroup title="正式版本" count={versionAssets.length}>
+                {versionAssets.map((asset) => (
+                  <MediaVersionRow
+                    active={previewChoice?.kind === "asset" && previewChoice.id === asset.id}
+                    key={asset.id}
+                    media={asset}
+                    onDelete={() => setDeleteTarget({ kind: "asset", item: asset })}
+                    onOpen={() => showAsset(asset)}
+                    onSelect={asset.is_selected ? undefined : () => onSelectAsset(asset)}
+                    status={asset.is_selected ? "当前" : "历史"}
+                  />
+                ))}
+              </VersionGroup>
+            ) : null}
+            {rejectedVersionCandidates.length ? (
+              <VersionGroup title="已拒绝" count={rejectedVersionCandidates.length} muted>
+                {rejectedVersionCandidates.map((candidate) => (
+                  <MediaVersionRow
+                    active={previewChoice?.kind === "candidate" && previewChoice.id === candidate.id}
+                    key={candidate.id}
+                    media={candidate}
+                    onDelete={() => setDeleteTarget({ kind: "candidate", item: candidate })}
+                    onOpen={() => showCandidate(candidate)}
+                    status="已拒绝"
+                  />
+                ))}
+              </VersionGroup>
+            ) : null}
+            {!versionAssets.length && !versionCandidates.length ? (
+              <div className="director-version-empty">
+                <strong>还没有{mediaKind === "video" ? "视频" : "首帧"}版本</strong>
+                <span>使用上方生成按钮创建第一个候选。</span>
+              </div>
+            ) : null}
           </div>
         </section>
       </aside>
@@ -976,6 +1117,42 @@ export function DirectorWorkbench({
         </div>
       ) : null}
 
+      {deleteTarget ? (
+        <div
+          className="director-modal-backdrop director-delete-backdrop"
+          onClick={() => { if (!deletingMediaId) setDeleteTarget(null); }}
+          role="presentation"
+        >
+          <section
+            aria-describedby="director-media-delete-description"
+            aria-labelledby="director-media-delete-title"
+            aria-modal="true"
+            className="director-media-delete-dialog"
+            onClick={(event) => event.stopPropagation()}
+            role="dialog"
+          >
+            <header>
+              <div><span>DELETE VERSION</span><h2 id="director-media-delete-title">删除{mediaTypeLabel(deleteTarget.item.asset_type)} v{deleteTarget.item.version}</h2></div>
+              <button aria-label="关闭删除确认" disabled={Boolean(deletingMediaId)} onClick={() => setDeleteTarget(null)} type="button">×</button>
+            </header>
+            <div className="director-delete-preview"><MediaThumbnail media={deleteTarget.item} /></div>
+            <div>
+              <strong>{deleteTarget.kind === "candidate" ? candidateStatusLabel(deleteTarget.item.status) : deleteTarget.item.is_selected ? "当前正式版本" : "历史正式版本"}</strong>
+              <p id="director-media-delete-description">
+                {mediaDeletionMessage(deleteTarget, selectedShotAssets, explicitFirstFrameId)}
+              </p>
+              <small>对应本地媒体文件会被清理，此操作无法撤销。</small>
+            </div>
+            <footer>
+              <button autoFocus className="secondary-button" disabled={Boolean(deletingMediaId)} onClick={() => setDeleteTarget(null)} type="button">取消</button>
+              <button className="danger-button" disabled={Boolean(deletingMediaId) || actionBusy} onClick={() => void confirmMediaDeletion()} type="button">
+                {deletingMediaId ? "正在删除…" : "确认删除此版本"}
+              </button>
+            </footer>
+          </section>
+        </div>
+      ) : null}
+
       {pendingShotId ? (
         <div className="director-modal-backdrop" role="presentation">
           <section aria-label="未保存修改" aria-modal="true" className="director-unsaved-dialog" role="dialog">
@@ -1036,6 +1213,116 @@ function MediaPreview({ media }: { media: Asset | AssetCandidate }) {
     return <img alt="当前片段预览" src={media.uri} />;
   }
   return <div className="director-empty">当前媒体只有记录，没有可预览文件。</div>;
+}
+
+function VersionGroup({
+  children,
+  count,
+  muted = false,
+  title,
+}: {
+  children: ReactNode;
+  count: number;
+  muted?: boolean;
+  title: string;
+}) {
+  return (
+    <section className={muted ? "director-version-group muted" : "director-version-group"}>
+      <header><strong>{title}</strong><span>{count}</span></header>
+      <div>{children}</div>
+    </section>
+  );
+}
+
+function MediaVersionRow({
+  active,
+  media,
+  onDelete,
+  onOpen,
+  onSelect,
+  status,
+}: {
+  active: boolean;
+  media: Asset | AssetCandidate;
+  onDelete: () => void;
+  onOpen: () => void;
+  onSelect?: () => void;
+  status: string;
+}) {
+  return (
+    <article className={active ? "director-version-row active" : "director-version-row"}>
+      <button aria-pressed={active} className="director-version-row-main" onClick={onOpen} type="button">
+        <span className="director-version-row-media"><MediaThumbnail media={media} /></span>
+        <span className="director-version-row-copy">
+          <strong>{mediaTypeLabel(media.asset_type)} v{media.version}</strong>
+          <small>{mediaMetadata(media)}</small>
+          <em>{status}</em>
+        </span>
+      </button>
+      <div className="director-version-row-actions">
+        {onSelect ? <button onClick={onSelect} type="button">设为当前</button> : null}
+        <button aria-label={`删除${mediaTypeLabel(media.asset_type)} v${media.version}`} className="delete" onClick={onDelete} type="button">删除</button>
+      </div>
+    </article>
+  );
+}
+
+function mediaTypeLabel(assetType: string) {
+  return assetType === "video" ? "视频" : "首帧";
+}
+
+function mediaMetadata(media: Asset | AssetCandidate) {
+  const values = [];
+  const duration = Number(media.duration_sec);
+  if (media.asset_type === "video" && Number.isFinite(duration) && duration > 0) {
+    values.push(`${formatSeconds(duration)} 秒`);
+  }
+  values.push(media.model ?? media.provider ?? "本地媒体");
+  return values.join(" · ");
+}
+
+function mediaStatusLabel(media: Asset | AssetCandidate | null) {
+  if (!media) return "未生成";
+  if ("candidate_type" in media) return candidateStatusLabel(media.status);
+  return `${media.is_selected ? "当前" : "历史"}${mediaTypeLabel(media.asset_type)}`;
+}
+
+function mediaStatusTone(media: Asset | AssetCandidate) {
+  if ("candidate_type" in media) return media.status === "pending_review" ? "pending" : "muted";
+  return media.is_selected ? "current" : "history";
+}
+
+function candidateStatusLabel(status: string) {
+  return status === "pending_review" ? "待采用候选" : status === "rejected" ? "已拒绝候选" : "候选";
+}
+
+function mediaDeletionMessage(
+  target: Exclude<MediaDeleteTarget, null>,
+  shotAssets: Asset[],
+  explicitFirstFrameId: string,
+) {
+  const label = mediaTypeLabel(target.item.asset_type);
+  if (target.kind === "candidate") {
+    return `只删除这个${candidateStatusLabel(target.item.status)}，不会改变当前采用的${label}。`;
+  }
+  if (!target.item.is_selected) {
+    return `只删除这个历史${label}版本，不会改变当前采用版本。`;
+  }
+  const replacement = shotAssets
+    .filter((asset) => (
+      asset.id !== target.item.id
+      && asset.asset_type === target.item.asset_type
+      && asset.asset_role === target.item.asset_role
+      && asset.variant_key === target.item.variant_key
+    ))
+    .sort((left, right) => right.version - left.version)[0];
+  const replacementMessage = replacement
+    ? `系统会自动把 v${replacement.version} 切换为当前版本。`
+    : `删除后这个片段将没有当前${label}。`;
+  const firstFrameMessage = target.item.id === explicitFirstFrameId
+    ? " 该首帧正在作为视频输入，删除时会同时解除引用。"
+    : "";
+  return `这是当前${label}版本。${replacementMessage}${firstFrameMessage}`;
 }
 
 function resolveReferenceAssets(shot: Shot, allImages: Asset[], adoptedImages: Asset[], explicitIds: string[]) {
@@ -1161,8 +1448,38 @@ function assetSortPriority(asset: Asset, referenceIds: string[], shotId: string)
   return 50;
 }
 
-function shotBeats(card: Record<string, unknown>) {
-  return (Array.isArray(card.beats) ? card.beats : []).filter(isRecord);
+function shotBeats(card: Record<string, unknown>): Record<string, unknown>[] {
+  return (Array.isArray(card.beats) ? card.beats : [])
+    .filter(isRecord)
+    .map((beat): Record<string, unknown> => ({
+      ...beat,
+      camera: stripInternalTiming(beat.camera),
+      action: stripInternalTiming(beat.action),
+    }));
+}
+
+function defaultDurationMode(shot: Shot, provider?: ProviderDescriptor): DurationMode {
+  return plannedShotDuration(shot) !== null
+    ? "fixed"
+    : provider?.smart_duration
+      ? "provider_auto"
+      : "fixed";
+}
+
+function plannedShotDuration(shot: Shot): number | null {
+  const plan = isRecord(shot.shot_card.segment_plan) ? shot.shot_card.segment_plan : {};
+  if (plan.duration_mode === "provider_auto") return null;
+  const duration = Number(plan.planned_duration_sec);
+  return Number.isFinite(duration) && duration > 0 ? duration : null;
+}
+
+function stripInternalTiming(value: unknown) {
+  return String(value ?? "")
+    .replace(/\d+(?:\.\d+)?\s*(?:-|–|—|~|～|至|到)\s*\d+(?:\.\d+)?\s*(?:秒|s)\s*[：:，,、]?\s*/gi, "")
+    .replace(/第\s*\d+(?:\.\d+)?\s*秒\s*(?:时|后)?\s*[：:，,、]?\s*/gi, "")
+    .replace(/\d+(?:\.\d+)?\s*(?:秒|s)\s*(?:后|时|处)\s*[：:，,、]?\s*/gi, "")
+    .replace(/^[\s：:，,、；;]+/, "")
+    .trim();
 }
 
 function withBeat(card: Record<string, unknown>, index: number, updates: Record<string, unknown>) {

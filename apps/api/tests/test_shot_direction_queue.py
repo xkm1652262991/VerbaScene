@@ -31,8 +31,10 @@ class RecordingShotProvider(MockLLMProvider):
     def __init__(self) -> None:
         super().__init__()
         self.phases: list[str] = []
+        self.requests: list = []
 
     def submit(self, request):
+        self.requests.append(request)
         self.phases.append(str(request.metadata.get("phase") or ""))
         return super().submit(request)
 
@@ -249,6 +251,12 @@ class ShotDirectionQueueTests(unittest.TestCase):
             self.assertEqual(
                 provider.phases,
                 ["storyboard_draft", "storyboard_reflection"],
+            )
+            self.assertTrue(
+                all(
+                    request.params.get("response_format") == {"type": "json_object"}
+                    for request in provider.requests
+                )
             )
             dialogue = db.query(Dialogue).filter(Dialogue.script_id == script.id).one()
             self.assertIn(dialogue.id, shots[0].dialogue_ids)

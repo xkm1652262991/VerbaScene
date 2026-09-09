@@ -1,7 +1,10 @@
 from dataclasses import dataclass, field
 from decimal import Decimal
 from enum import StrEnum
-from typing import Any
+from typing import Any, Callable
+
+
+ProviderProgressCallback = Callable[[dict[str, Any]], None]
 
 
 class ProviderType(StrEnum):

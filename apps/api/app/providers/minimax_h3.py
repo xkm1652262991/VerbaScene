@@ -35,6 +35,56 @@ FL2VA_MODEL = "minimax-h3-fl2va"
 AUTO_MODELS = {"", "auto", "minimax-h3-auto", "minimax_h3_auto"}
 MAX_REFERENCE_IMAGES = 9
 MAX_IMAGE_BYTES = 50 * 1024 * 1024
+H3_AUDIO_PROMPT_VERSION = "h3-native-audio-v1"
+
+_GENERIC_AUDIO_INTRO = (
+    "生成连续动画英语短剧片段，使用原生英文对白、环境音和动作音效。"
+)
+_H3_CORE_FIELDS = (
+    "integrated_multimodal_description",
+    "overall_soundscape",
+    "non_diegetic_music",
+)
+_H3_FULL_REFERENCE_FIELDS = (
+    "subject_definitions",
+    "summary",
+    "retention_analysis",
+    "detailed_description",
+    "overall_soundscape",
+    "non_diegetic_music",
+)
+_DIALOGUE_WITH_EMOTION_RE = re.compile(
+    r"^(?P<speaker>.+?)（(?P<emotion>[^）]+)）说：\{(?P<text>.*)\}$"
+)
+_DIALOGUE_RE = re.compile(r"^(?P<speaker>.+?)说：\{(?P<text>.*)\}$")
+_VOICEOVER_RE = re.compile(
+    r"旁白|画外音|解说|系统语音|引导声|narrator|voice[ -]?over",
+    re.IGNORECASE,
+)
+_SPEECH_DIRECTION_RE = re.compile(
+    r"<d>|\{[^{}]+\}|\b(?:says?|asks?|repl(?:y|ies)|speaks?|shouts?|"
+    r"whispers?|dialogue|voice[ -]?over)\b|对白|说[：:]",
+    re.IGNORECASE,
+)
+_SILENCE_RE = re.compile(
+    r"全程(?:静音|无声)|完全(?:静音|无声)|无声视频|complete silence|"
+    r"entirely silent|silent video",
+    re.IGNORECASE,
+)
+_EXPLICIT_SOUND_RE = re.compile(
+    r"音效|环境音|环境声|脚步|碰撞|呼吸|笑声|sound(?:scape| effect)?|"
+    r"ambience|ambient|footsteps?|impact|breath",
+    re.IGNORECASE,
+)
+_MUSIC_LINE_RE = re.compile(
+    r"^(?:画外配乐|背景配乐|配乐|BGM|background score|"
+    r"non[-_ ]diegetic music)[：:]\s*(?P<value>.+)$",
+    re.IGNORECASE,
+)
+_AUDIO_POLICY_MARKERS = (
+    "Every audible spoken word",
+    "The soundtrack consists exclusively",
+)
 
 
 @dataclass(frozen=True)
@@ -168,6 +218,7 @@ class MiniMaxH3GatewayProvider(ProviderAdapter):
                         "reference_roles": [
                             item.reference.reference_role for item in image_inputs
                         ],
+                        "prompt_contract_version": H3_AUDIO_PROMPT_VERSION,
                     },
                 },
                 usage=ProviderUsage(cost=Decimal("0"), unit="LOCAL_GPU"),
@@ -568,6 +619,9 @@ def _provider_prompt(
         if not line.strip().lower().startswith(("参考绑定：", "reference binding:"))
     ]
     prompt = "\n".join(lines).strip()
+    if request.negative_prompt:
+        prompt = f"{prompt}\n负面约束：{request.negative_prompt.strip()}".strip()
+    prompt = _h3_audio_prompt(prompt)
     if references:
         if resolved_model == FL2VA_MODEL:
             binding = (
@@ -580,13 +634,183 @@ def _provider_prompt(
                 for index, item in enumerate(references, start=1)
             ) + "。保持各参考图对应的身份、外观、材质与空间关系。"
         prompt = f"{binding}\n{prompt}" if prompt else binding
-    if request.negative_prompt:
-        prompt = f"{prompt}\n负面约束：{request.negative_prompt.strip()}".strip()
     if not prompt:
         raise ValueError("MiniMax H3 prompt cannot be empty")
     if len(prompt) > 12_000:
         raise ValueError("MiniMax H3 prompt cannot exceed 12000 characters")
     return prompt
+
+
+def _h3_audio_prompt(prompt: str) -> str:
+    """Add H3's native-audio structure without mutating the stored shot prompt."""
+
+    if _has_ordered_fields(prompt, _H3_CORE_FIELDS) or _has_ordered_fields(
+        prompt,
+        _H3_FULL_REFERENCE_FIELDS,
+    ):
+        return _ensure_audio_exclusivity(prompt)
+
+    integrated, dialogue_found, music = _normalize_h3_integrated_description(prompt)
+    if not integrated:
+        raise ValueError("MiniMax H3 prompt cannot be empty")
+    policy = _audio_exclusivity_policy(
+        tagged_dialogue=dialogue_found,
+        speech_requested=bool(_SPEECH_DIRECTION_RE.search(integrated)),
+    )
+    integrated = f"{integrated.rstrip()} {policy}".strip()
+
+    if _SILENCE_RE.search(prompt):
+        soundscape = "N/A"
+    elif _EXPLICIT_SOUND_RE.search(prompt):
+        soundscape = (
+            "A clean, restrained mix carries the environmental and physical action "
+            "sounds explicitly synchronized in the shot description. Each sound is "
+            "caused by its visible action and remains beneath the dialogue."
+        )
+    else:
+        soundscape = (
+            "A clean, low-level room tone supports the scene, with restrained physical "
+            "sounds caused by visible actions."
+        )
+
+    return (
+        f"integrated_multimodal_description: [Shot 1] {integrated}\n\n"
+        f"overall_soundscape: {soundscape}\n\n"
+        f"non_diegetic_music: {music or 'N/A'}"
+    )
+
+
+def _has_ordered_fields(prompt: str, fields: tuple[str, ...]) -> bool:
+    position = -1
+    for field in fields:
+        match = re.search(rf"(?im)^\s*{re.escape(field)}\s*:", prompt)
+        if match is None or match.start() <= position:
+            return False
+        position = match.start()
+    return True
+
+
+def _ensure_audio_exclusivity(prompt: str) -> str:
+    folded_prompt = prompt.casefold()
+    if any(marker.casefold() in folded_prompt for marker in _AUDIO_POLICY_MARKERS):
+        return prompt.strip()
+    soundscape = re.search(r"(?im)^\s*overall_soundscape\s*:", prompt)
+    if soundscape is None:
+        return prompt.strip()
+    policy = _audio_exclusivity_policy(
+        tagged_dialogue="<d>" in prompt,
+        speech_requested=bool(_SPEECH_DIRECTION_RE.search(prompt[: soundscape.start()])),
+    )
+    return (
+        f"{prompt[:soundscape.start()].rstrip()} {policy}\n\n"
+        f"{prompt[soundscape.start():].lstrip()}"
+    )
+
+
+def _normalize_h3_integrated_description(prompt: str) -> tuple[str, bool, str | None]:
+    lines: list[str] = []
+    speaker_ids: dict[str, str] = {}
+    dialogue_found = False
+    music: str | None = None
+
+    for raw_line in prompt.splitlines():
+        line = raw_line.strip()
+        if not line or line == _GENERIC_AUDIO_INTRO:
+            continue
+        music_match = _MUSIC_LINE_RE.match(line)
+        if music_match:
+            music = music_match.group("value").strip()
+            continue
+        if line.startswith("对白："):
+            rendered, found = _h3_dialogue_line(line.removeprefix("对白："), speaker_ids)
+            lines.append(rendered if rendered else line)
+            dialogue_found = dialogue_found or found
+            continue
+        if line.startswith("音效："):
+            sound_cues = (
+                line.removeprefix("音效：")
+                .rstrip("。")
+                .replace("<", "")
+                .replace(">", "")
+            )
+            lines.append(
+                "Synchronized diegetic sound: "
+                + sound_cues
+                + "."
+            )
+            continue
+        lines.append(line)
+
+    return " ".join(lines), dialogue_found, music
+
+
+def _h3_dialogue_line(
+    value: str,
+    speaker_ids: dict[str, str],
+) -> tuple[str, bool]:
+    rendered: list[str] = []
+    found = False
+    for segment in (item.strip() for item in value.split("；")):
+        if not segment:
+            continue
+        match = _DIALOGUE_WITH_EMOTION_RE.match(segment)
+        if match is None:
+            match = _DIALOGUE_RE.match(segment)
+        if match is None:
+            rendered.append(f"对白：{segment}")
+            continue
+
+        speaker = match.group("speaker").strip()
+        text = match.group("text").strip()
+        if not speaker or not text:
+            rendered.append(f"对白：{segment}")
+            continue
+        key = speaker.casefold()
+        speaker_id = speaker_ids.setdefault(key, f"S{len(speaker_ids) + 1}")
+        emotion = (
+            match.groupdict().get("emotion", "").strip()
+            if match.re is _DIALOGUE_WITH_EMOTION_RE
+            else ""
+        )
+        if _VOICEOVER_RE.search(speaker):
+            rendered.append(
+                f"A stable off-screen voice named {speaker} ({speaker_id}) says in an "
+                f"off-screen voiceover: <d>[English] {text}</d>."
+            )
+        else:
+            delivery = f" with a {emotion} delivery" if emotion else ""
+            rendered.append(
+                f"{speaker} ({speaker_id}) says{delivery}: "
+                f"<d>[English] {text}</d>."
+            )
+        found = True
+    return " ".join(rendered), found
+
+
+def _audio_exclusivity_policy(
+    *,
+    tagged_dialogue: bool,
+    speech_requested: bool,
+) -> str:
+    if tagged_dialogue:
+        return (
+            "Every audible spoken word comes from exactly one scripted <d> block and is "
+            "voiced once by its assigned (Sx) speaker. Only those assigned speakers "
+            "produce speech; every other character says no words and keeps a naturally "
+            "closed mouth except during an explicitly scripted non-verbal reaction."
+        )
+    if speech_requested:
+        return (
+            "Every audible spoken word comes from the explicitly scripted speech and is "
+            "voiced once by its assigned speaker. Only those speakers produce speech; "
+            "every other character says no words and keeps a naturally closed mouth except "
+            "during an explicitly scripted non-verbal reaction."
+        )
+    return (
+        "The soundtrack consists exclusively of non-verbal ambience and synchronized "
+        "physical sounds caused by visible actions; no character speaks, and mouths remain "
+        "naturally closed except during an explicitly scripted non-verbal reaction."
+    )
 
 
 def _reference_label(reference: _ReferenceSpec, request: ProviderRequest) -> str:

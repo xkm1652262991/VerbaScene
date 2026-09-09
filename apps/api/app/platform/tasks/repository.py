@@ -4,12 +4,17 @@ from copy import deepcopy
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any, Iterable
+from uuid import uuid4
 
 from sqlalchemy import and_, case, func, or_, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, selectinload
 
 from app.models import GenerationTask
+from app.platform.tasks.lease import (
+    acquire_task_lease_fence,
+    current_task_execution_lease,
+)
 from app.platform.tasks.types import ACTIVE_TASK_STATUSES, TERMINAL_TASK_STATUSES, TaskStatus
 
 
@@ -177,6 +182,7 @@ class TaskRepository:
             return None
 
         lease_expires_at = claimed_at + timedelta(seconds=max(1, lease_seconds))
+        lease_token = str(uuid4())
         result = db.execute(
             update(GenerationTask)
             .where(GenerationTask.id == candidate_id)
@@ -189,6 +195,7 @@ class TaskRepository:
                 started_at=func.coalesce(GenerationTask.started_at, claimed_at),
                 heartbeat_at=claimed_at,
                 lease_owner=owner,
+                lease_token=lease_token,
                 lease_expires_at=lease_expires_at,
             )
         )
@@ -203,6 +210,7 @@ class TaskRepository:
         *,
         task_id: str,
         owner: str,
+        lease_token: str | None = None,
         lease_seconds: int,
         now: datetime | None = None,
     ) -> bool:
@@ -211,6 +219,11 @@ class TaskRepository:
             update(GenerationTask)
             .where(GenerationTask.id == task_id)
             .where(GenerationTask.lease_owner == owner)
+            .where(
+                GenerationTask.lease_token == lease_token
+                if lease_token is not None
+                else GenerationTask.lease_token.is_not(None)
+            )
             .where(GenerationTask.status.in_(tuple(ACTIVE_TASK_STATUSES)))
             .values(
                 heartbeat_at=heartbeat_at,
@@ -226,10 +239,12 @@ class TaskRepository:
         *,
         task_id: str,
         owner: str,
+        lease_token: str | None = None,
         available_at: datetime | None = None,
     ) -> bool:
         values: dict[str, Any] = {
             "lease_owner": None,
+            "lease_token": None,
             "lease_expires_at": None,
             "heartbeat_at": utc_now(),
         }
@@ -239,6 +254,11 @@ class TaskRepository:
             update(GenerationTask)
             .where(GenerationTask.id == task_id)
             .where(GenerationTask.lease_owner == owner)
+            .where(
+                GenerationTask.lease_token == lease_token
+                if lease_token is not None
+                else GenerationTask.lease_token.is_not(None)
+            )
             .values(**values)
         )
         db.flush()
@@ -255,9 +275,31 @@ class TaskRepository:
         error_code: str | None = None,
         error_message: str | None = None,
         raw_response: dict[str, Any] | None = None,
-    ) -> None:
+        owner: str | None = None,
+        lease_token: str | None = None,
+    ) -> bool:
         if status.value not in TERMINAL_TASK_STATUSES:
             raise ValueError("finish() requires a terminal status")
+        if task.status in TERMINAL_TASK_STATUSES:
+            return task.status == status.value
+
+        execution_lease = current_task_execution_lease()
+        expected_owner: str | None
+        expected_token: str | None
+        if execution_lease is not None and execution_lease.task_id == task.id:
+            expected_owner = execution_lease.owner
+            expected_token = execution_lease.token
+        else:
+            expected_owner = owner or task.lease_owner
+            expected_token = lease_token or task.lease_token
+        if expected_owner and expected_token and not acquire_task_lease_fence(
+            db,
+            task_id=task.id,
+            owner=expected_owner,
+            token=expected_token,
+        ):
+            db.expire(task)
+            return False
         task.status = status.value
         task.progress = 100 if status == TaskStatus.SUCCEEDED else task.progress
         task.progress_label = progress_label
@@ -268,9 +310,11 @@ class TaskRepository:
         task.finished_at = utc_now()
         task.active_dedupe_key = None
         task.lease_owner = None
+        task.lease_token = None
         task.lease_expires_at = None
         db.add(task)
         db.flush()
+        return True
 
     def request_cancel(self, db: Session, task: GenerationTask) -> GenerationTask:
         if task.status in TERMINAL_TASK_STATUSES:

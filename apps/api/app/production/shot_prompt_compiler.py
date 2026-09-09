@@ -5,11 +5,12 @@ import json
 from typing import Any
 
 from app.agents import build_shot_video_prompt
+from app.agents.shot_timing import strip_internal_timing
 from app.agents.style import resolve_visual_style
 from app.models import Character, Dialogue, Project, Prop, Scene, Shot
 
 
-VIDEO_PROMPT_COMPILER_VERSION = "seedance2-shot-first-v6"
+VIDEO_PROMPT_COMPILER_VERSION = "seedance2-shot-first-v7"
 
 
 def apply_video_prompt_field(
@@ -124,6 +125,12 @@ def _prompt_source_card(value: object) -> dict[str, Any]:
     ):
         card.pop(key, None)
     card["beats"] = _without_legacy_beat_timing(card.get("beats"))
+    if isinstance(card.get("action"), dict):
+        action = dict(card["action"])
+        for key in ("start_state", "main_action", "end_state"):
+            if key in action:
+                action[key] = strip_internal_timing(action[key])
+        card["action"] = action
     if isinstance(card.get("motion_timing"), dict):
         motion_timing = dict(card["motion_timing"])
         motion_timing["beats"] = _without_legacy_beat_timing(motion_timing.get("beats"))
@@ -141,5 +148,8 @@ def _without_legacy_beat_timing(value: object) -> list[dict[str, Any]]:
         beat = dict(item)
         for key in ("duration_sec", "time", "range", "at"):
             beat.pop(key, None)
+        for key in ("camera", "camera_language", "action", "description"):
+            if key in beat:
+                beat[key] = strip_internal_timing(beat[key])
         result.append(beat)
     return result

@@ -18,6 +18,7 @@ from app.core.config import settings
 from app.models import Asset, AssetCandidate, GenerationTask, Shot
 from app.platform.media import get_media_store
 from app.platform.tasks.types import ACTIVE_TASK_STATUSES
+from app.services.artifact_idempotency import artifact_completion_key
 from app.services.asset_repository import (
     asset_source_context,
     ensure_asset_target_exists,
@@ -63,6 +64,8 @@ def select_asset(db: Session, asset_id: str) -> Asset:
     )
     asset.is_selected = True
     db.add(asset)
+    if asset.asset_type == "video":
+        _sync_shot_duration_to_video_asset(db, asset)
     db.commit()
     db.refresh(asset)
     return asset
@@ -179,6 +182,15 @@ def extract_video_frame_candidate(
         id=candidate_id,
         project_id=source_asset.project_id,
         source_task_id=task.id,
+        completion_key=artifact_completion_key(
+            task.id,
+            artifact_kind="candidate",
+            candidate_type="extracted_frame",
+            asset_type="image",
+            asset_role="shot_storyboard",
+            entity_type="shot",
+            entity_id=source_asset.entity_id,
+        ),
         source_script_id=source_asset.source_script_id,
         source_shot_batch_id=source_asset.source_shot_batch_id,
         candidate_type="extracted_frame",
@@ -349,10 +361,12 @@ def delete_asset(db: Session, asset_id: str) -> None:
     entity_id = asset.entity_id
     asset_role = asset.asset_role
     was_selected = asset.is_selected
-    unlink_local_storage_file(asset.uri)
+    original_uri = asset.uri
+    _remove_asset_from_shot_references(db, project_id, asset.id)
     db.delete(asset)
     db.flush()
 
+    replacement: Asset | None = None
     if was_selected and entity_type and entity_id:
         replacement = db.scalar(
             select(Asset)
@@ -367,7 +381,118 @@ def delete_asset(db: Session, asset_id: str) -> None:
         if replacement:
             replacement.is_selected = True
             db.add(replacement)
+    if was_selected and asset_type == "video":
+        if replacement is not None:
+            _sync_shot_duration_to_video_asset(db, replacement)
+        else:
+            _restore_shot_planned_duration(db, entity_type, entity_id)
     db.commit()
+    unlink_local_storage_file(original_uri)
+
+
+def _remove_asset_from_shot_references(db: Session, project_id: str, asset_id: str) -> None:
+    shots = list(db.scalars(select(Shot).where(Shot.project_id == project_id)).all())
+    for shot in shots:
+        card = dict(shot.shot_card or {})
+        raw_reference_ids = card.get("reference_asset_ids")
+        reference_ids = (
+            [str(item) for item in raw_reference_ids if str(item)]
+            if isinstance(raw_reference_ids, list)
+            else []
+        )
+        remaining_reference_ids = [item for item in reference_ids if item != asset_id]
+        removed_bound_reference = len(remaining_reference_ids) != len(reference_ids)
+        removed_first_frame = card.get("video_reference_asset_id") == asset_id
+        if not removed_bound_reference and not removed_first_frame:
+            continue
+
+        if removed_bound_reference:
+            card["reference_asset_ids"] = remaining_reference_ids
+            remaining_assets = (
+                list(
+                    db.scalars(
+                        select(Asset)
+                        .where(Asset.project_id == project_id)
+                        .where(Asset.id.in_(remaining_reference_ids))
+                    ).all()
+                )
+                if remaining_reference_ids
+                else []
+            )
+            remaining_by_id = {item.id: item for item in remaining_assets}
+            ordered_assets = [
+                remaining_by_id[item_id]
+                for item_id in remaining_reference_ids
+                if item_id in remaining_by_id
+            ]
+            shot.character_ids = list(dict.fromkeys(
+                item.entity_id
+                for item in ordered_assets
+                if item.entity_type == "character" and item.entity_id
+            ))
+            scene_asset = next((item for item in ordered_assets if item.entity_type == "scene"), None)
+            shot.scene_id = scene_asset.entity_id if scene_asset else None
+            shot.prop_ids = list(dict.fromkeys(
+                item.entity_id
+                for item in ordered_assets
+                if item.entity_type == "prop" and item.entity_id
+            ))
+        if removed_first_frame:
+            card.pop("video_reference_asset_id", None)
+        card["prompt_stale"] = True
+        card["stale_reason"] = "引用资产已删除，需要重新检查视频 Prompt"
+        shot.shot_card = card
+        shot.status = "ready_for_review"
+        db.add(shot)
+
+
+def _sync_shot_duration_to_video_asset(db: Session, asset: Asset) -> None:
+    if asset.entity_type != "shot" or not asset.entity_id:
+        return
+    request_metadata = (
+        asset.raw_response.get("request_metadata")
+        if isinstance(asset.raw_response, dict)
+        and isinstance(asset.raw_response.get("request_metadata"), dict)
+        else {}
+    )
+    if asset.duration_sec is not None and asset.duration_sec > 0:
+        apply_actual_video_duration_to_shot(
+            db,
+            entity_type=asset.entity_type,
+            entity_id=asset.entity_id,
+            duration_sec=asset.duration_sec,
+            request_metadata=request_metadata,
+        )
+        return
+    _restore_shot_planned_duration(db, asset.entity_type, asset.entity_id)
+
+
+def _restore_shot_planned_duration(db: Session, entity_type: str | None, entity_id: str | None) -> None:
+    if entity_type != "shot" or not entity_id:
+        return
+    shot = db.get(Shot, entity_id)
+    if shot is None:
+        return
+    card = dict(shot.shot_card or {})
+    segment_plan = (
+        dict(card.get("segment_plan"))
+        if isinstance(card.get("segment_plan"), dict)
+        else {}
+    )
+    planned_value = segment_plan.get("planned_duration_sec")
+    try:
+        planned_duration = Decimal(str(planned_value)) if planned_value is not None else None
+    except (ArithmeticError, ValueError):
+        planned_duration = None
+    shot.duration_sec = (
+        planned_duration
+        if planned_duration is not None and planned_duration.is_finite() and planned_duration > 0
+        else None
+    )
+    segment_plan.pop("actual_duration_sec", None)
+    card["segment_plan"] = segment_plan
+    shot.shot_card = card
+    db.add(shot)
 
 
 def _payload_contains_identifier(value: object, identifier: str) -> bool:

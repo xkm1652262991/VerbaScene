@@ -32,6 +32,7 @@
 | [26-backend-task-runtime.md](26-backend-task-runtime.md) | 统一任务状态、租约、重试、取消与视频批次合同 |
 | [27-minimax-h3-video-integration.md](27-minimax-h3-video-integration.md) | MiniMax H3 网关、自动模型路由与异步任务合同 |
 | [28-反思式分镜导演Agent.md](28-反思式分镜导演Agent.md) | 分镜草案、资产观察、Reflection、受限 Patch 与任务恢复合同 |
+| [29-system-technical-design.md](29-system-technical-design.md) | 系统综合技术设计：架构、数据、任务、Provider、部署、验证与演进边界 |
 
 ## 求职与项目表达
 

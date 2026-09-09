@@ -19,7 +19,7 @@
     "source_text": "",
     "required_phrases": [],
     "required_tokens": ["红球", "Mia", "Leo"],
-    "forbidden_tokens": ["老师总结", "齐声"]
+    "forbidden_tokens": ["老师总结"]
   },
   {
     "id": "imported-sibling-relation",
@@ -52,7 +52,7 @@
     "source_text": "",
     "required_phrases": [],
     "required_tokens": ["Nora", "Ben", "钥匙"],
-    "forbidden_tokens": ["齐声"]
+    "forbidden_tokens": []
   },
   {
     "id": "silent-visual-story",

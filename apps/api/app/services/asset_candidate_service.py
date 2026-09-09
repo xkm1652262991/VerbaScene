@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 from app.models import Asset, AssetCandidate, GenerationTask
 from app.platform.tasks.types import ACTIVE_TASK_STATUSES
 from app.schemas.asset import AssetCandidateCreate
+from app.services.artifact_idempotency import artifact_completion_key
 from app.services.asset_lifecycle_service import apply_actual_video_duration_to_shot
 from app.services.asset_repository import (
     get_project_or_404,
@@ -101,6 +102,18 @@ def create_asset_candidate(
         project_id=project_id,
         asset_id=None,
         source_task_id=payload.source_task_id,
+        completion_key=artifact_completion_key(
+            payload.source_task_id,
+            artifact_kind="candidate",
+            candidate_type=payload.candidate_type,
+            asset_type=payload.asset_type,
+            asset_role=payload.asset_role,
+            entity_type=payload.entity_type,
+            entity_id=payload.entity_id,
+            variant_key=payload.variant_key or (
+                "base" if payload.entity_type in {"character", "scene", "prop"} else None
+            ),
+        ),
         source_stage_run_id=payload.source_stage_run_id,
         source_script_id=payload.source_script_id,
         source_shot_batch_id=payload.source_shot_batch_id,
@@ -151,6 +164,10 @@ def promote_asset_candidate(
     candidate = db.get(AssetCandidate, candidate_id)
     if candidate is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Asset candidate not found")
+    if candidate.status == "promoted" and candidate.promoted_asset_id:
+        promoted = db.get(Asset, candidate.promoted_asset_id)
+        if promoted is not None:
+            return promoted
     if candidate.status not in OPEN_CANDIDATE_STATUSES:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Asset candidate is not pending review")
 
@@ -172,6 +189,15 @@ def promote_asset_candidate(
         entity_id=candidate.entity_id,
         variant_key=candidate.variant_key,
         source_task_id=candidate.source_task_id,
+        completion_key=artifact_completion_key(
+            candidate.source_task_id,
+            artifact_kind="asset",
+            asset_type=candidate.asset_type,
+            asset_role=candidate.asset_role,
+            entity_type=candidate.entity_type,
+            entity_id=candidate.entity_id,
+            variant_key=candidate.variant_key,
+        ),
         source_stage_run_id=candidate.source_stage_run_id,
         source_script_id=candidate.source_script_id,
         source_shot_batch_id=candidate.source_shot_batch_id,

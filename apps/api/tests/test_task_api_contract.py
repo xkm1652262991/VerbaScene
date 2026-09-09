@@ -46,6 +46,7 @@ class TaskApiContractTests(unittest.TestCase):
         ):
             self.assertIn(field, properties)
         self.assertNotIn("lease_owner", properties)
+        self.assertNotIn("lease_token", properties)
         self.assertNotIn("lease_expires_at", properties)
 
     def test_task_list_exposes_new_filters(self):

@@ -65,6 +65,7 @@ def initialize_database(database_engine: Engine | None = None) -> None:
     _migrate_local_animation_english_workflow(target_engine)
     _migrate_local_task_runtime(target_engine)
     _normalize_local_task_runtime(target_engine)
+    _migrate_local_task_write_safety(target_engine)
 
 
 def _ensure_local_asset_spec_columns(database_engine: Engine) -> None:
@@ -422,6 +423,78 @@ def _normalize_local_task_runtime(database_engine: Engine) -> None:
         )
 
 
+def _migrate_local_task_write_safety(database_engine: Engine) -> None:
+    """Add lease fencing and logical-artifact idempotency to local SQLite."""
+    migration_id = "20260904_task_write_safety_v1"
+    with database_engine.begin() as connection:
+        connection.execute(
+            text(
+                "CREATE TABLE IF NOT EXISTS local_schema_migrations ("
+                "version TEXT PRIMARY KEY, applied_at TEXT NOT NULL)"
+            )
+        )
+        if connection.execute(
+            text("SELECT 1 FROM local_schema_migrations WHERE version = :version"),
+            {"version": migration_id},
+        ).scalar_one_or_none():
+            return
+
+    inspector = inspect(database_engine)
+    existing_tables = set(inspector.get_table_names())
+    additions = {
+        "generation_tasks": {"lease_token": "VARCHAR(36)"},
+        "assets": {"completion_key": "VARCHAR(160)"},
+        "asset_candidates": {"completion_key": "VARCHAR(160)"},
+    }
+    with database_engine.begin() as connection:
+        connection_inspector = inspect(connection)
+        for table_name, columns in additions.items():
+            if table_name not in existing_tables:
+                continue
+            current = _sqlite_column_names(connection_inspector, table_name)
+            for column_name, definition in columns.items():
+                if column_name not in current:
+                    connection.execute(
+                        text(
+                            f"ALTER TABLE {table_name} "
+                            f"ADD COLUMN {column_name} {definition}"
+                        )
+                    )
+
+        if "generation_tasks" in existing_tables:
+            connection.execute(
+                text(
+                    "CREATE INDEX IF NOT EXISTS ix_generation_tasks_lease_token "
+                    "ON generation_tasks (lease_token)"
+                )
+            )
+        if "assets" in existing_tables:
+            connection.execute(
+                text(
+                    "CREATE UNIQUE INDEX IF NOT EXISTS uq_assets_completion_key "
+                    "ON assets (completion_key) WHERE completion_key IS NOT NULL"
+                )
+            )
+        if "asset_candidates" in existing_tables:
+            connection.execute(
+                text(
+                    "CREATE UNIQUE INDEX IF NOT EXISTS uq_asset_candidates_completion_key "
+                    "ON asset_candidates (completion_key) "
+                    "WHERE completion_key IS NOT NULL"
+                )
+            )
+        connection.execute(
+            text(
+                "INSERT INTO local_schema_migrations(version, applied_at) "
+                "VALUES (:version, :applied_at)"
+            ),
+            {
+                "version": migration_id,
+                "applied_at": datetime.now(timezone.utc).isoformat(),
+            },
+        )
+
+
 def _local_task_failure_assignments(
     columns: set[str],
     *,
@@ -437,6 +510,7 @@ def _local_task_failure_assignments(
         "finished_at": "finished_at = COALESCE(finished_at, CURRENT_TIMESTAMP)",
         "active_dedupe_key": "active_dedupe_key = NULL",
         "lease_owner": "lease_owner = NULL",
+        "lease_token": "lease_token = NULL",
         "lease_expires_at": "lease_expires_at = NULL",
     }
     assignments.extend(value for column, value in optional.items() if column in columns)

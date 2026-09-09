@@ -169,6 +169,7 @@ tools/                    可选模型服务工具与公开 submodule
 - [Provider Adapter](docs/04-provider-adapter.md)
 - [生成流水线](docs/05-generation-pipeline.md)
 - [FFmpeg 合成](docs/07-ffmpeg-composition.md)
+- [系统技术设计](docs/29-system-technical-design.md)
 - [当前架构](docs/21-current-architecture.md)
 - [后端任务运行时](docs/26-backend-task-runtime.md)
 - [Demo 与验证证据](docs/25-demo-evidence.md)

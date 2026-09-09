@@ -1,7 +1,12 @@
 from abc import ABC, abstractmethod
 from decimal import Decimal
 
-from app.providers.types import ProviderRequest, ProviderResponse, ProviderType
+from app.providers.types import (
+    ProviderProgressCallback,
+    ProviderRequest,
+    ProviderResponse,
+    ProviderType,
+)
 
 
 class ProviderAdapter(ABC):
@@ -28,6 +33,21 @@ class ProviderAdapter(ABC):
     @abstractmethod
     def submit(self, request: ProviderRequest) -> ProviderResponse:
         raise NotImplementedError
+
+    def submit_streaming(
+        self,
+        request: ProviderRequest,
+        *,
+        on_progress: ProviderProgressCallback | None = None,
+    ) -> ProviderResponse:
+        """Submit while exposing incremental progress when the adapter supports it.
+
+        The default keeps existing adapters and test doubles compatible. Text
+        adapters can override this method to consume a streaming response while
+        still returning the normalized synchronous ProviderResponse contract.
+        """
+        _ = on_progress
+        return self.submit(request)
 
     def poll(self, provider_task_id: str) -> ProviderResponse:
         raise NotImplementedError("Provider does not support polling")

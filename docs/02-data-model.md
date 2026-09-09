@@ -56,17 +56,17 @@ Character 只表示至少在一个生产场景中具有可见身体、动作或�
 
 `Shot` 是可独立生成的视频片段：
 
-- `duration_sec` 不再由 LLM 预测。生成前为空表示由 Provider 智能决定；人工明确使用固定时长时保存覆盖值；视频版本采用后保存 Provider 返回或媒体检测得到的实际时长。
-- 新生成方案只规划连续叙事边界和片段数量，不给单个 Shot 分配精确秒数，也不把每个短动作单独保存成 Shot。
+- `duration_sec` 在新分镜方案中保存分镜导演 Agent 按剧情事件规划的片段总时长；视频版本采用后更新为 Provider 返回或媒体检测得到的实际时长。人工仍可覆盖，历史空值继续表示 Provider 智能决定。
+- 新生成方案按剧情事件规划连续叙事边界和片段总时长，不平均切片，也不把每个短动作单独保存成 Shot。
 - `dialogue_ids / character_ids / prop_ids`
 - `shot_card.schema_version = 3`
 - `shot_card.beats[]`: `beat_id / camera / action / dialogue_ids / sound_cues`
-- `shot_card.segment_plan`: `duration_mode / expected_duration_range / internal_shot_count / actual_duration_sec`
+- `shot_card.segment_plan`: `duration_mode / duration_source / planned_duration_sec / duration_rationale / internal_shot_count / actual_duration_sec`
 - `video_prompt`: 实际编辑稿和实际发送稿
 - `shot_card.prompt_fingerprint`
 - `shot_card.prompt_stale`
 
-`beats[]` 中的每一项是片段内部镜头，只表达有顺序的剧情、镜头语言、动作、对白和音效，不保存或要求人工分配秒数。默认每个片段包含 2–4 个内部镜头；只有场景或时空变化、连续性断裂、主要资产集合明显变化，或单次生成无法自然承载完整动作时，才拆为新的 Shot。历史项目中的 `beats[].duration_sec` 只作为旧数据兼容，不参与新 Prompt 编译。
+`beats[]` 中的每一项是片段内部镜头，只表达有顺序的剧情、镜头语言、动作、对白和音效，不保存或要求人工分配秒数。默认每个片段包含 2–4 个内部镜头；只有场景或时空变化、连续性断裂、主要资产集合明显变化，或单次生成无法自然承载完整动作时，才拆为新的 Shot。历史项目中的 beat 时长字段和动作文本内的绝对时间码只作为旧数据兼容，均不参与新 Prompt 编译。
 
 ## Asset / AssetCandidate
 
@@ -79,6 +79,11 @@ project_id + asset_type + entity_type + entity_id + asset_role + variant_key
 `variant_key=base` 表示基础形象，其他稳定键表示剧情状态。同一键的重新生成只增加版本，不覆盖历史。
 
 视频片段按 `shot + shot_video` 管理候选、当前版本和历史。
+
+由任务生成的 `Asset / AssetCandidate` 还保存可空 `completion_key`。该键由
+`source_task_id + 逻辑产物槽位（类型、角色、实体、变体）` 稳定派生并施加唯一约束，
+防止同一 completion 重放产生新版本。`source_task_id` 本身不唯一，因为宫格分镜等
+任务会合法产出多个不同槽位的资产。
 
 ## ProjectStageRun
 
@@ -93,11 +98,12 @@ project_id + asset_type + entity_type + entity_id + asset_role + variant_key
 - `retry_of_task_id`：人工重试尝试链，不占用批次父子语义。
 - `resource_key / active_dedupe_key`：资源范围与数据库活动去重键。
 - `idempotency_key`：按项目与任务类型幂等。
-- `available_at / lease_owner / lease_expires_at / heartbeat_at`：本地 Worker 领取和恢复信息。
+- `available_at / lease_owner / lease_token / lease_expires_at / heartbeat_at`：本地 Worker 领取和恢复信息。
 - `cancel_requested_at`：幂等取消请求时间。
 
-租约所有者是内部实现字段，不输出到 `GenerationTaskRead`。终态必须清空
-`active_dedupe_key` 和租约。
+租约所有者和每次 claim 唯一的 `lease_token` 是内部实现字段，不输出到
+`GenerationTaskRead`。Worker 写入以 `task_id + owner + token + 未过期` 为 fencing
+条件；终态必须清空 `active_dedupe_key` 和全部租约字段。
 
 ## Export
 

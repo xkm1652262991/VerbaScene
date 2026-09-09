@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 
 from app.models import Asset, AssetCandidate, GenerationTask, Shot
 from app.providers.types import ProviderResponse, ProviderStatus
+from app.services.artifact_idempotency import artifact_completion_key
 from app.services.asset_candidate_service import promote_asset_candidate
 from app.services.asset_repository import (
     asset_source_context,
@@ -16,7 +17,11 @@ from app.services.asset_repository import (
 )
 from app.services.media_generation_support import sanitize_large_payload, with_avd_asset_usage
 from app.services.media_storage_service import materialize_data_uri
-from app.services.task_service import mark_task_succeeded
+from app.services.task_service import (
+    TaskCompletionConflictError,
+    begin_task_completion,
+    mark_task_succeeded,
+)
 from app.services.workflow_state_service import (
     mark_downstream_stages_pending,
     mark_stage_approved,
@@ -30,6 +35,14 @@ def persist_video_candidate_task_result(
     response: ProviderResponse,
 ) -> AssetCandidate:
     """Persist and adopt a candidate from a frozen task snapshot."""
+    if not begin_task_completion(db, task):
+        existing = _completed_video_candidate(db, task)
+        if existing is None:
+            raise TaskCompletionConflictError(
+                f"Succeeded video task {task.id} has no persisted candidate"
+            )
+        return existing
+
     payload = task.input_payload if isinstance(task.input_payload, dict) else {}
     request_payload = payload.get("provider_request")
     if not isinstance(request_payload, dict):
@@ -217,6 +230,16 @@ def persist_provider_video_candidate(
         entity_id=entity_id,
         variant_key="base" if entity_type in {"character", "scene", "prop"} else None,
         source_task_id=source_task_id,
+        completion_key=artifact_completion_key(
+            source_task_id,
+            artifact_kind="candidate",
+            candidate_type="generated",
+            asset_type="video",
+            asset_role=resolved_asset_role,
+            entity_type=entity_type,
+            entity_id=entity_id,
+            variant_key="base" if entity_type in {"character", "scene", "prop"} else None,
+        ),
         source_stage_run_id=source_stage_run_id,
         source_script_id=source_script_id,
         source_shot_batch_id=source_shot_batch_id,
@@ -245,3 +268,23 @@ def persist_provider_video_candidate(
     db.add(candidate)
     db.flush()
     return candidate
+
+
+def _completed_video_candidate(
+    db: Session,
+    task: GenerationTask,
+) -> AssetCandidate | None:
+    result = task.result_payload if isinstance(task.result_payload, dict) else {}
+    candidate_ids = result.get("candidate_ids")
+    if isinstance(candidate_ids, list):
+        for candidate_id in candidate_ids:
+            candidate = db.get(AssetCandidate, str(candidate_id))
+            if candidate is not None and candidate.source_task_id == task.id:
+                return candidate
+    return db.scalar(
+        select(AssetCandidate)
+        .where(AssetCandidate.source_task_id == task.id)
+        .where(AssetCandidate.asset_type == "video")
+        .order_by(AssetCandidate.created_at, AssetCandidate.id)
+        .limit(1)
+    )

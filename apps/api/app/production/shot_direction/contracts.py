@@ -11,7 +11,7 @@ from app.agents.shot_breakdown import parse_shot_breakdown_response
 
 
 SHOT_DIRECTION_TASK_TYPE = "shot_breakdown"
-SHOT_DIRECTION_PIPELINE_VERSION = "reflexion-shot-director-v1"
+SHOT_DIRECTION_PIPELINE_VERSION = "reflexion-shot-director-v2"
 MANUALLY_RETRYABLE_SHOT_DIRECTION_TASK_TYPES = frozenset({SHOT_DIRECTION_TASK_TYPE})
 
 REVIEW_CATEGORIES = frozenset(
@@ -439,6 +439,19 @@ def build_shot_contract_report(
     allowed_character_ids = source.allowed_character_ids
     allowed_scene_ids = source.allowed_scene_ids
     allowed_prop_ids = source.allowed_prop_ids
+    duration_range = (
+        source.segment_contract.get("shot_duration_range")
+        if isinstance(source.segment_contract.get("shot_duration_range"), dict)
+        else {}
+    )
+    requires_agent_duration = (
+        source.segment_contract.get("duration_source") == "agent"
+        or bool(duration_range)
+    )
+    min_duration = float(duration_range.get("min_sec", 4))
+    max_duration = float(duration_range.get("max_sec", 15))
+    planned_total = 0.0
+    duration_plan_valid = True
 
     if not shots:
         errors.append({"code": "shots_empty", "message": "最终分镜没有任何片段。", "shot_nos": []})
@@ -472,10 +485,39 @@ def build_shot_contract_report(
         max_beats = _positive_int(source.segment_contract.get("max_internal_shots"), 4)
         if len(beats) < min_beats or len(beats) > max_beats:
             errors.append({"code": "internal_beat_count_invalid", "message": f"片段 {shot_no} 的内部镜头数不在 {min_beats}-{max_beats} 范围。", "shot_nos": [shot_no]})
+        if requires_agent_duration:
+            try:
+                duration = float(shot.get("duration_sec"))
+            except (TypeError, ValueError):
+                duration_plan_valid = False
+                errors.append({"code": "duration_plan_missing", "message": f"片段 {shot_no} 缺少 Agent 规划总时长。", "shot_nos": [shot_no]})
+            else:
+                planned_total += duration
+                if duration < min_duration or duration > max_duration:
+                    duration_plan_valid = False
+                    errors.append({"code": "duration_plan_out_of_range", "message": f"片段 {shot_no} 的规划总时长不在 {min_duration:g}-{max_duration:g} 秒范围。", "shot_nos": [shot_no]})
+            if not _text(card.get("duration_rationale")):
+                errors.append({"code": "duration_rationale_missing", "message": f"片段 {shot_no} 缺少基于剧情事件的时长依据。", "shot_nos": [shot_no]})
         for dialogue_id in _string_list(shot.get("dialogue_ids")):
             if dialogue_id not in source.allowed_dialogue_ids:
                 errors.append({"code": "dialogue_reference_invalid", "message": f"片段 {shot_no} 引用了未知 Dialogue。", "shot_nos": [shot_no]})
             used_dialogues.setdefault(dialogue_id, []).append(shot_no)
+
+    total_range = (
+        source.segment_contract.get("total_duration_range")
+        if isinstance(source.segment_contract.get("total_duration_range"), dict)
+        else {}
+    )
+    min_total = float(total_range.get("min_sec", 0))
+    max_total = float(total_range.get("max_sec", float("inf")))
+    if requires_agent_duration and duration_plan_valid and (planned_total < min_total or planned_total > max_total):
+        errors.append(
+            {
+                "code": "duration_budget_out_of_range",
+                "message": f"整批规划总时长 {planned_total:g} 秒不在 {min_total:g}-{max_total:g} 秒目标范围。",
+                "shot_nos": [],
+            }
+        )
 
     for dialogue_id, shot_nos in used_dialogues.items():
         if len(shot_nos) > 1:
