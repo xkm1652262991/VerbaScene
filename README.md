@@ -12,7 +12,7 @@ VerbaScene 是一个面向内部内容生产的 AIGC 工作台：将创意描述
 
 **1 分 58 秒 · Seedance 2.0 + FlashVSR 1.5× · 720p · 中英双语字幕 · 原生音效**
 
-<!-- FINAL_DEMO_VIDEO -->
+https://github.com/user-attachments/assets/898d8d0c-17f3-45dd-a427-5f552b1e0a59
 
 [下载720p双语成品](https://github.com/xkm1652262991/VerbaScene/releases/download/demo-a-moon-for-you-seedance2-720p-20260911/a-moon-for-you.seedance2.r2.flashvsr-1.5x.bilingual.mp4) · [无字幕版](https://github.com/xkm1652262991/VerbaScene/releases/download/demo-a-moon-for-you-seedance2-720p-20260911/a-moon-for-you.seedance2.r2.flashvsr-1.5x.clean.mp4) · [中英双语SRT](https://github.com/xkm1652262991/VerbaScene/releases/download/demo-a-moon-for-you-seedance2-720p-20260911/a-moon-for-you.seedance2.r2.flashvsr-1.5x.bilingual.srt) · [剧本](docs/scripts/送你一个月亮-seedance2.md) · [制作记录](docs/demos/a-moon-for-you-seedance2-720p.md)
 
