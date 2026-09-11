@@ -12,9 +12,9 @@ VerbaScene 是一个面向内部内容生产的 AIGC 工作台：将创意描述
 
 **约 1 分 40 秒 · 英文对白与字幕 · 原生音效 · 854×480**
 
-[▶ 观看或下载完整样片](https://github.com/xkm1652262991/VerbaScene/releases/tag/demo-a-moon-for-you-20260911)
+https://github.com/user-attachments/assets/3e0251fc-1274-4cae-a524-9934042dfc99
 
-[无字幕原片](https://github.com/xkm1652262991/VerbaScene/releases/download/demo-a-moon-for-you-20260911/a-moon-for-you.clean.mp4) · [英文 SRT](https://github.com/xkm1652262991/VerbaScene/releases/download/demo-a-moon-for-you-20260911/a-moon-for-you.en.srt) · [剧本](docs/scripts/送你一个月亮.md) · [制作记录](docs/demos/a-moon-for-you.md)
+[高清字幕版](https://github.com/xkm1652262991/VerbaScene/releases/download/demo-a-moon-for-you-20260911/a-moon-for-you.en.mp4) · [无字幕原片](https://github.com/xkm1652262991/VerbaScene/releases/download/demo-a-moon-for-you-20260911/a-moon-for-you.clean.mp4) · [英文 SRT](https://github.com/xkm1652262991/VerbaScene/releases/download/demo-a-moon-for-you-20260911/a-moon-for-you.en.srt) · [剧本](docs/scripts/送你一个月亮.md) · [制作记录](docs/demos/a-moon-for-you.md)
 
 > 当前定位：可运行的单机工作台与工程验证项目，不是已经完成鉴权、分布式任务和多人协作的生产 SaaS。
 
