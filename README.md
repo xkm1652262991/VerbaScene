@@ -6,6 +6,16 @@ VerbaScene 是一个面向内部内容生产的 AIGC 工作台：将创意描述
 
 项目默认使用 CEFR A1 英语，不限制受众年龄；目标成片为 1–3 分钟，默认 `16:9 / 854×480`，也支持 `9:16 / 480×854`。
 
+## 原创动画样片 · 送你一个月亮
+
+小狐狸想把月亮装进罐子，送给过生日的小兔。一份笨拙的礼物，让两个朋友重新发现陪伴的意义。
+
+**约 1 分 40 秒 · 英文对白与字幕 · 原生音效 · 854×480**
+
+https://github.com/user-attachments/assets/3e0251fc-1274-4cae-a524-9934042dfc99
+
+[高清字幕版](https://github.com/xkm1652262991/VerbaScene/releases/download/demo-a-moon-for-you-20260911/a-moon-for-you.en.mp4) · [无字幕原片](https://github.com/xkm1652262991/VerbaScene/releases/download/demo-a-moon-for-you-20260911/a-moon-for-you.clean.mp4) · [英文 SRT](https://github.com/xkm1652262991/VerbaScene/releases/download/demo-a-moon-for-you-20260911/a-moon-for-you.en.srt) · [剧本](docs/scripts/送你一个月亮.md) · [制作记录](docs/demos/a-moon-for-you.md)
+
 > 当前定位：可运行的单机工作台与工程验证项目，不是已经完成鉴权、分布式任务和多人协作的生产 SaaS。
 
 ## 为什么不是简单的模型套壳
@@ -126,7 +136,7 @@ tools/                    可选模型服务工具与公开 submodule
 
 当前已经具备可运行工作台、Mock 合同链路、真实 Provider Adapter 和短样片产物，但还不能描述为“生产就绪”：
 
-- 当前真实成片证据最长约 32.5 秒，尚未完成当前产品合同下的 1–3 分钟验收。
+- 已完成《送你一个月亮》99.58 秒原创样片的真实生成与导出；本次跳过 Reflexion 并进行定向剪辑，完整自动工作流和长期批量生产仍需另行验收。
 - 任务队列为进程内线程队列，不支持多实例协调。
 - 暂无登录、权限、配额、成本治理和受控媒体访问。
 - 真实 Provider 的参考图消费、原生音频和失败恢复仍需逐个模型验收。
