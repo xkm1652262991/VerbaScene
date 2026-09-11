@@ -10,11 +10,11 @@ VerbaScene 是一个面向内部内容生产的 AIGC 工作台：将创意描述
 
 小狐狸想把月亮装进罐子，送给过生日的小兔。一份笨拙的礼物，让两个朋友重新发现陪伴的意义。
 
-**2 分 03 秒 · Seedance 2.0 整片生成 · 480p · 英文对白与字幕 · 原生音效**
+**1 分 58 秒 · Seedance 2.0 + FlashVSR 1.5× · 720p · 中英双语字幕 · 原生音效**
 
-https://github.com/user-attachments/assets/b3ce4f0f-c7fd-444e-9c7d-f0f0635e445e
+https://github.com/user-attachments/assets/898d8d0c-17f3-45dd-a427-5f552b1e0a59
 
-[英文字幕版](https://github.com/xkm1652262991/VerbaScene/releases/download/demo-a-moon-for-you-seedance2-20260911/a-moon-for-you.seedance2.en.mp4) · [无字幕原片](https://github.com/xkm1652262991/VerbaScene/releases/download/demo-a-moon-for-you-seedance2-20260911/a-moon-for-you.seedance2.clean.mp4) · [英文 SRT](https://github.com/xkm1652262991/VerbaScene/releases/download/demo-a-moon-for-you-seedance2-20260911/a-moon-for-you.seedance2.en.srt) · [剧本](docs/scripts/送你一个月亮-seedance2.md) · [制作记录](docs/demos/a-moon-for-you-seedance2.md)
+[下载720p双语成品](https://github.com/xkm1652262991/VerbaScene/releases/download/demo-a-moon-for-you-seedance2-720p-20260911/a-moon-for-you.seedance2.r2.flashvsr-1.5x.bilingual.mp4) · [无字幕版](https://github.com/xkm1652262991/VerbaScene/releases/download/demo-a-moon-for-you-seedance2-720p-20260911/a-moon-for-you.seedance2.r2.flashvsr-1.5x.clean.mp4) · [中英双语SRT](https://github.com/xkm1652262991/VerbaScene/releases/download/demo-a-moon-for-you-seedance2-720p-20260911/a-moon-for-you.seedance2.r2.flashvsr-1.5x.bilingual.srt) · [剧本](docs/scripts/送你一个月亮-seedance2.md) · [制作记录](docs/demos/a-moon-for-you-seedance2-720p.md)
 
 > 当前定位：可运行的单机工作台与工程验证项目，不是已经完成鉴权、分布式任务和多人协作的生产 SaaS。
 
@@ -136,7 +136,7 @@ tools/                    可选模型服务工具与公开 submodule
 
 当前已经具备可运行工作台、Mock 合同链路、真实 Provider Adapter 和短样片产物，但还不能描述为“生产就绪”：
 
-- 已完成《送你一个月亮》123 秒 Seedance 2.0 整片重制，复用参考图、480p、智能时长、原生音轨与英文字幕；本次跳过 Reflexion，完整自动工作流和长期批量生产仍需另行验收。
+- 已完成《送你一个月亮》118 秒最终修订版，复用参考图、Seedance 2.0 智能时长生成、局部剪辑、FlashVSR 720p后期、原生音轨与中英双语字幕；本次跳过 Reflexion，完整自动工作流和长期批量生产仍需另行验收。
 - 任务队列为进程内线程队列，不支持多实例协调。
 - 暂无登录、权限、配额、成本治理和受控媒体访问。
 - 真实 Provider 的参考图消费、原生音频和失败恢复仍需逐个模型验收。
