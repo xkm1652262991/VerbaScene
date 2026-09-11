@@ -47,6 +47,10 @@ VerbaScene 是一个面向内部内容生产的 AIGC 工作台：将创意描述
 
 ## 架构
 
+使用 [Archify](https://github.com/tt-a1i/archify) 绘制的 **[六张详细架构与流程图](docs/diagrams/archify/README.md)**，覆盖系统运行、剧本与分镜、媒体生产、异步任务、资产来源和任务状态，提供 PNG、SVG、交互 HTML 与 JSON 源文件。
+
+[![VerbaScene 系统运行架构](docs/diagrams/archify/01-system-architecture.png)](docs/diagrams/archify/README.md)
+
 ```mermaid
 flowchart LR
   UI["React + TypeScript 工作台"] --> API["FastAPI 模块化单体"]

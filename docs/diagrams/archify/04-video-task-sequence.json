@@ -1,0 +1,187 @@
+{
+  "schema_version": 1,
+  "diagram_type": "sequence",
+  "meta": {
+    "title": "VerbaScene · 异步视频任务时序",
+    "locale": "zh-CN",
+    "quality_profile": "showcase",
+    "column_fit": "spread",
+    "viewBox": [
+      1080,
+      550
+    ]
+  },
+  "participants": [
+    {
+      "id": "browser-ui",
+      "type": "frontend",
+      "label": "Web 工作台"
+    },
+    {
+      "id": "application-api",
+      "type": "backend",
+      "label": "API / 领域服务"
+    },
+    {
+      "id": "task-database",
+      "type": "database",
+      "label": "任务数据库"
+    },
+    {
+      "id": "leased-worker",
+      "type": "backend",
+      "label": "租约 Worker"
+    },
+    {
+      "id": "video-provider",
+      "type": "external",
+      "label": "视频 Adapter",
+      "sublabel": "封装模型端点"
+    },
+    {
+      "id": "media-store",
+      "type": "database",
+      "label": "MediaStore"
+    }
+  ],
+  "messages": [
+    {
+      "id": "video-step-1",
+      "from": "browser-ui",
+      "to": "application-api",
+      "y": 160,
+      "label": "请求生成片段",
+      "variant": "emphasis"
+    },
+    {
+      "id": "video-step-2",
+      "from": "application-api",
+      "to": "task-database",
+      "y": 176,
+      "label": "去重 + 冻结输入 + queued",
+      "variant": "emphasis"
+    },
+    {
+      "id": "video-step-3",
+      "from": "application-api",
+      "to": "browser-ui",
+      "y": 192,
+      "label": "202 + task_id",
+      "variant": "return"
+    },
+    {
+      "id": "video-step-4",
+      "from": "leased-worker",
+      "to": "task-database",
+      "y": 208,
+      "label": "领取租约；提交检查点",
+      "variant": "emphasis"
+    },
+    {
+      "id": "video-step-6",
+      "from": "leased-worker",
+      "to": "video-provider",
+      "y": 226,
+      "label": "submit(冻结请求)",
+      "variant": "emphasis"
+    },
+    {
+      "id": "video-step-7",
+      "from": "video-provider",
+      "to": "leased-worker",
+      "y": 254,
+      "label": "远端任务 ID",
+      "variant": "return"
+    },
+    {
+      "id": "video-step-8",
+      "from": "leased-worker",
+      "to": "task-database",
+      "y": 272,
+      "label": "保存 ID + waiting_provider",
+      "variant": "default"
+    },
+    {
+      "id": "video-step-10",
+      "from": "leased-worker",
+      "to": "video-provider",
+      "y": 290,
+      "label": "poll(同一远端 ID)",
+      "variant": "dashed"
+    },
+    {
+      "id": "video-step-11",
+      "from": "video-provider",
+      "to": "leased-worker",
+      "y": 318,
+      "label": "完成状态",
+      "variant": "return"
+    },
+    {
+      "id": "video-step-12",
+      "from": "leased-worker",
+      "to": "video-provider",
+      "y": 346,
+      "label": "fetch_result",
+      "variant": "default"
+    },
+    {
+      "id": "video-step-13",
+      "from": "video-provider",
+      "to": "leased-worker",
+      "y": 374,
+      "label": "媒体临时文件",
+      "variant": "return"
+    },
+    {
+      "id": "video-step-14",
+      "from": "leased-worker",
+      "to": "media-store",
+      "y": 402,
+      "label": "写入项目媒体目录",
+      "variant": "emphasis"
+    },
+    {
+      "id": "video-step-15",
+      "from": "leased-worker",
+      "to": "task-database",
+      "y": 420,
+      "label": "校验租约 + 候选 + succeeded",
+      "variant": "emphasis"
+    },
+    {
+      "id": "video-step-16",
+      "from": "browser-ui",
+      "to": "application-api",
+      "y": 438,
+      "label": "查询任务进度",
+      "variant": "default"
+    },
+    {
+      "id": "video-step-18",
+      "from": "application-api",
+      "to": "browser-ui",
+      "y": 466,
+      "label": "刷新候选供人工采用",
+      "variant": "return"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "任务与观察",
+      "items": [
+        "202 表示接受；领取后、提交前保存检查点。",
+        "外部调用在事务外执行；前端查询真实结果。"
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "故障与写入",
+      "items": [
+        "有远端 ID 只轮询；未知是否受理时停止重提。",
+        "写入前校验租约；候选完成后仍需人工采用。"
+      ]
+    }
+  ]
+}

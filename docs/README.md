@@ -10,6 +10,8 @@
 
 ## 当前事实源
 
+图示入口：**[Archify 详细图集](diagrams/archify/README.md)**，包含六张图、可编辑源文件、代码依据及校验记录。
+
 | 文档 | 内容 |
 | --- | --- |
 | [00-product-requirements.md](00-product-requirements.md) | 产品范围、默认规格与锁定决策 |

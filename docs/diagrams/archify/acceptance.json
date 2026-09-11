@@ -1,0 +1,1138 @@
+{
+  "schema_version": 1,
+  "created_at": "2026-09-11T05:53:13.675997+00:00",
+  "tool": {
+    "name": "Archify",
+    "skill_version": "2.17",
+    "repository": "https://github.com/tt-a1i/archify"
+  },
+  "project": {
+    "repository": "https://github.com/xkm1652262991/VerbaScene",
+    "source_revision": "6929b68d389f7f12454d90849461c3b7c4746e16"
+  },
+  "path_base": "Paths are relative to this acceptance.json for portability.",
+  "scope": "Diagram structure, browser containment, perceptual review, viewer interaction and static exports. No application test suite or live model generation was run.",
+  "evidence_notes": "Automated visualReview stays pending by design; perceptual_review is a separate image-capable review. Raw browser receipts and screenshots are retained locally.",
+  "diagrams": [
+    {
+      "diagram_type": "architecture",
+      "title": "VerbaScene · 系统运行架构",
+      "output": "01-system-architecture.html",
+      "specification": "01-system-architecture.json",
+      "specification_sha256": "03434a8b2631f10a34a657cbe23bf0981306ca3d57c47dc0e500d90ba6832605",
+      "specification_bytes": 6894,
+      "artifact_sha256": "3ad32393ed2a016325d21ff6865241e9198ffbf85fd7078e0a68c3735c5c6c6b",
+      "artifact_bytes": 717340,
+      "validation": {
+        "checksPassed": 9,
+        "checkCount": 9,
+        "compositionProfile": "showcase",
+        "compositionStatus": "pass",
+        "errors": 0,
+        "warnings": 0
+      },
+      "source_evidence": {
+        "verified": true,
+        "repository": "https://github.com/xkm1652262991/VerbaScene",
+        "revision": "6929b68d389f7f12454d90849461c3b7c4746e16",
+        "references": 16
+      },
+      "browser_evidence": "passed",
+      "automated_browser": {
+        "evidenceKind": "automated-browser",
+        "status": "pass",
+        "state": {
+          "detail": "read",
+          "motion": "still"
+        },
+        "artifact_sha256": "3ad32393ed2a016325d21ff6865241e9198ffbf85fd7078e0a68c3735c5c6c6b",
+        "visualReview": "pending",
+        "diagnostics": [],
+        "viewports": [
+          {
+            "width": 1440,
+            "height": 900,
+            "theme": "light",
+            "ok": true,
+            "overflowX": false,
+            "overflowY": false,
+            "readabilityOk": true,
+            "minimumProjectedNodeTextPx": 7.653600000000001,
+            "viewerChromeOk": true,
+            "resolvedTheme": "light"
+          },
+          {
+            "width": 1600,
+            "height": 1000,
+            "theme": "light",
+            "ok": true,
+            "overflowX": false,
+            "overflowY": false,
+            "readabilityOk": true,
+            "minimumProjectedNodeTextPx": 8.186399999999999,
+            "viewerChromeOk": true,
+            "resolvedTheme": "light"
+          },
+          {
+            "width": 1920,
+            "height": 1080,
+            "theme": "light",
+            "ok": true,
+            "overflowX": false,
+            "overflowY": false,
+            "readabilityOk": true,
+            "minimumProjectedNodeTextPx": 9,
+            "viewerChromeOk": true,
+            "resolvedTheme": "light"
+          },
+          {
+            "width": 2048,
+            "height": 1320,
+            "theme": "light",
+            "ok": true,
+            "overflowX": false,
+            "overflowY": false,
+            "readabilityOk": true,
+            "minimumProjectedNodeTextPx": 9,
+            "viewerChromeOk": true,
+            "resolvedTheme": "light"
+          }
+        ],
+        "captures": [
+          {
+            "width": 1440,
+            "height": 900,
+            "theme": "light",
+            "ok": true,
+            "overflowX": false,
+            "overflowY": false,
+            "readabilityOk": true,
+            "minimumProjectedNodeTextPx": 7.653600000000001,
+            "viewerChromeOk": true,
+            "resolvedTheme": "light",
+            "sha256": "b6f7aeab4a57752c23f556d229c4640840dac10e13f77943f3b94820143c73bf",
+            "bytes": 135327
+          },
+          {
+            "width": 1440,
+            "height": 900,
+            "theme": "dark",
+            "ok": true,
+            "overflowX": false,
+            "overflowY": false,
+            "readabilityOk": true,
+            "minimumProjectedNodeTextPx": 7.653600000000001,
+            "viewerChromeOk": true,
+            "resolvedTheme": "dark",
+            "sha256": "1e177712cb57bd10ac51bb68ceb15547f6890c9f8711ce93dc04023bd9ef53c2",
+            "bytes": 137922
+          },
+          {
+            "width": 2048,
+            "height": 1320,
+            "theme": "light",
+            "ok": true,
+            "overflowX": false,
+            "overflowY": false,
+            "readabilityOk": true,
+            "minimumProjectedNodeTextPx": 9,
+            "viewerChromeOk": true,
+            "resolvedTheme": "light",
+            "sha256": "d1759cf37e6790f9824242159d5634088fa72af18aef1f75e44b26b95fde154e",
+            "bytes": 186700
+          },
+          {
+            "width": 2048,
+            "height": 1320,
+            "theme": "dark",
+            "ok": true,
+            "overflowX": false,
+            "overflowY": false,
+            "readabilityOk": true,
+            "minimumProjectedNodeTextPx": 9,
+            "viewerChromeOk": true,
+            "resolvedTheme": "dark",
+            "sha256": "e6653a95e4cf2ccd0e3cd44d96ba97deed35b2fffda33e45258408f2fc2e1e5f",
+            "bytes": 189739
+          }
+        ]
+      },
+      "visual_review": "passed",
+      "correction_rounds": 0,
+      "perceptual_review": {
+        "reviewer": "Codex image-capable review",
+        "artifact_sha256": "3ad32393ed2a016325d21ff6865241e9198ffbf85fd7078e0a68c3735c5c6c6b",
+        "screenshots_inspected": [
+          {
+            "width": 1440,
+            "height": 900,
+            "theme": "dark"
+          },
+          {
+            "width": 2048,
+            "height": 1320,
+            "theme": "light"
+          }
+        ],
+        "exported_png_inspected": true,
+        "observations": "Labels, node fit, routes, default READ composition and both color themes reviewed. Full-canvas PNG export reviewed without viewer controls or selection overlays."
+      },
+      "viewer_interactions": {
+        "focused": true,
+        "focusClosed": true,
+        "finderOpened": true,
+        "finderClosed": true
+      },
+      "exports": [
+        {
+          "format": "png",
+          "file": "01-system-architecture.png",
+          "bytes": 549082,
+          "sha256": "2ac7168e529ed0fbfa9361234c2c390b4edee797c454f6a754d29cfba54f207f",
+          "canonicalStateClean": true,
+          "width": 5000,
+          "height": 2752
+        },
+        {
+          "format": "svg",
+          "file": "01-system-architecture.svg",
+          "bytes": 56991,
+          "sha256": "5255c28309688aa27e4251022ffe07e36f3f8392c4f853a86a3ef49f530079da",
+          "canonicalStateClean": true
+        }
+      ]
+    },
+    {
+      "diagram_type": "workflow",
+      "title": "VerbaScene · 剧本与反思式分镜",
+      "output": "02-creative-pipelines.html",
+      "specification": "02-creative-pipelines.json",
+      "specification_sha256": "ca11bcbdd5bf19834f04e86b32d4d21735dcb0a5350b2ccb1ed79b3790759a78",
+      "specification_bytes": 6292,
+      "artifact_sha256": "1e0d53f8a94f22f3b96043e4615e347f2859d8dc6b97bd71b7e445f65ddd86b1",
+      "artifact_bytes": 718875,
+      "validation": {
+        "checksPassed": 9,
+        "checkCount": 9,
+        "compositionProfile": "showcase",
+        "compositionStatus": "pass",
+        "errors": 0,
+        "warnings": 0
+      },
+      "source_evidence": null,
+      "browser_evidence": "passed",
+      "automated_browser": {
+        "evidenceKind": "automated-browser",
+        "status": "pass",
+        "state": {
+          "detail": "read",
+          "motion": "still"
+        },
+        "artifact_sha256": "1e0d53f8a94f22f3b96043e4615e347f2859d8dc6b97bd71b7e445f65ddd86b1",
+        "visualReview": "pending",
+        "diagnostics": [],
+        "viewports": [
+          {
+            "width": 1440,
+            "height": 900,
+            "theme": "light",
+            "ok": true,
+            "overflowX": false,
+            "overflowY": false,
+            "readabilityOk": true,
+            "minimumProjectedNodeTextPx": 8,
+            "viewerChromeOk": true,
+            "resolvedTheme": "light"
+          },
+          {
+            "width": 1600,
+            "height": 1000,
+            "theme": "light",
+            "ok": true,
+            "overflowX": false,
+            "overflowY": false,
+            "readabilityOk": true,
+            "minimumProjectedNodeTextPx": 8,
+            "viewerChromeOk": true,
+            "resolvedTheme": "light"
+          },
+          {
+            "width": 1920,
+            "height": 1080,
+            "theme": "light",
+            "ok": true,
+            "overflowX": false,
+            "overflowY": false,
+            "readabilityOk": true,
+            "minimumProjectedNodeTextPx": 8,
+            "viewerChromeOk": true,
+            "resolvedTheme": "light"
+          },
+          {
+            "width": 2048,
+            "height": 1320,
+            "theme": "light",
+            "ok": true,
+            "overflowX": false,
+            "overflowY": false,
+            "readabilityOk": true,
+            "minimumProjectedNodeTextPx": 8,
+            "viewerChromeOk": true,
+            "resolvedTheme": "light"
+          }
+        ],
+        "captures": [
+          {
+            "width": 1440,
+            "height": 900,
+            "theme": "light",
+            "ok": true,
+            "overflowX": false,
+            "overflowY": false,
+            "readabilityOk": true,
+            "minimumProjectedNodeTextPx": 8,
+            "viewerChromeOk": true,
+            "resolvedTheme": "light",
+            "sha256": "33bf9ec6cf3cad5753b745cbcf1161990fb2a9d61307e9ed29e63ab0db6d683c",
+            "bytes": 158046
+          },
+          {
+            "width": 1440,
+            "height": 900,
+            "theme": "dark",
+            "ok": true,
+            "overflowX": false,
+            "overflowY": false,
+            "readabilityOk": true,
+            "minimumProjectedNodeTextPx": 8,
+            "viewerChromeOk": true,
+            "resolvedTheme": "dark",
+            "sha256": "9ca6df3924fc22abe48f53a53a313fe0892c7aa408e1003ef973185ff395d043",
+            "bytes": 162418
+          },
+          {
+            "width": 2048,
+            "height": 1320,
+            "theme": "light",
+            "ok": true,
+            "overflowX": false,
+            "overflowY": false,
+            "readabilityOk": true,
+            "minimumProjectedNodeTextPx": 8,
+            "viewerChromeOk": true,
+            "resolvedTheme": "light",
+            "sha256": "82e8e184560b9fd758fe1f15a51d92e677660dc15a8efa710d9a75a092a1fae5",
+            "bytes": 208959
+          },
+          {
+            "width": 2048,
+            "height": 1320,
+            "theme": "dark",
+            "ok": true,
+            "overflowX": false,
+            "overflowY": false,
+            "readabilityOk": true,
+            "minimumProjectedNodeTextPx": 8,
+            "viewerChromeOk": true,
+            "resolvedTheme": "dark",
+            "sha256": "67a6f6d62c000d9aeace20e5829fef138aca62d9c75b9ec21fd241b3b08dcd54",
+            "bytes": 211746
+          }
+        ]
+      },
+      "visual_review": "passed",
+      "correction_rounds": 2,
+      "perceptual_review": {
+        "reviewer": "Codex image-capable review",
+        "artifact_sha256": "1e0d53f8a94f22f3b96043e4615e347f2859d8dc6b97bd71b7e445f65ddd86b1",
+        "screenshots_inspected": [
+          {
+            "width": 1440,
+            "height": 900,
+            "theme": "dark"
+          }
+        ],
+        "exported_png_inspected": true,
+        "observations": "Labels, node fit, routes, default READ composition and both color themes reviewed. Full-canvas PNG export reviewed without viewer controls or selection overlays."
+      },
+      "viewer_interactions": {
+        "focused": true,
+        "focusClosed": true,
+        "finderOpened": true,
+        "finderClosed": true
+      },
+      "exports": [
+        {
+          "format": "png",
+          "file": "02-creative-pipelines.png",
+          "bytes": 600344,
+          "sha256": "ea025f76bb81323ecafbbbcc5b5949177b73fcfa30bf267fd5b801962f39a14d",
+          "canonicalStateClean": true,
+          "width": 4816,
+          "height": 2448
+        },
+        {
+          "format": "svg",
+          "file": "02-creative-pipelines.svg",
+          "bytes": 61824,
+          "sha256": "b3fe9076d770d0594d5f453bb2867aeb75b9d294ce7f6898379a646b5c7b8a26",
+          "canonicalStateClean": true
+        }
+      ]
+    },
+    {
+      "diagram_type": "workflow",
+      "title": "VerbaScene · 媒体生产与成片导出",
+      "output": "03-media-production.html",
+      "specification": "03-media-production.json",
+      "specification_sha256": "b9f7e937b4a6b9d852df86f792d4b0ca2aca4bf58a08f163372d6892c6f91329",
+      "specification_bytes": 5796,
+      "artifact_sha256": "ea36daa97ce687bfcc55e23e8d286294276d75508589f45bd70c4e74084303c6",
+      "artifact_bytes": 717836,
+      "validation": {
+        "checksPassed": 9,
+        "checkCount": 9,
+        "compositionProfile": "showcase",
+        "compositionStatus": "pass",
+        "errors": 0,
+        "warnings": 0
+      },
+      "source_evidence": null,
+      "browser_evidence": "passed",
+      "automated_browser": {
+        "evidenceKind": "automated-browser",
+        "status": "pass",
+        "state": {
+          "detail": "read",
+          "motion": "still"
+        },
+        "artifact_sha256": "ea36daa97ce687bfcc55e23e8d286294276d75508589f45bd70c4e74084303c6",
+        "visualReview": "pending",
+        "diagnostics": [],
+        "viewports": [
+          {
+            "width": 1440,
+            "height": 900,
+            "theme": "light",
+            "ok": true,
+            "overflowX": false,
+            "overflowY": false,
+            "readabilityOk": true,
+            "minimumProjectedNodeTextPx": 8,
+            "viewerChromeOk": true,
+            "resolvedTheme": "light"
+          },
+          {
+            "width": 1600,
+            "height": 1000,
+            "theme": "light",
+            "ok": true,
+            "overflowX": false,
+            "overflowY": false,
+            "readabilityOk": true,
+            "minimumProjectedNodeTextPx": 8,
+            "viewerChromeOk": true,
+            "resolvedTheme": "light"
+          },
+          {
+            "width": 1920,
+            "height": 1080,
+            "theme": "light",
+            "ok": true,
+            "overflowX": false,
+            "overflowY": false,
+            "readabilityOk": true,
+            "minimumProjectedNodeTextPx": 8,
+            "viewerChromeOk": true,
+            "resolvedTheme": "light"
+          },
+          {
+            "width": 2048,
+            "height": 1320,
+            "theme": "light",
+            "ok": true,
+            "overflowX": false,
+            "overflowY": false,
+            "readabilityOk": true,
+            "minimumProjectedNodeTextPx": 8,
+            "viewerChromeOk": true,
+            "resolvedTheme": "light"
+          }
+        ],
+        "captures": [
+          {
+            "width": 1440,
+            "height": 900,
+            "theme": "light",
+            "ok": true,
+            "overflowX": false,
+            "overflowY": false,
+            "readabilityOk": true,
+            "minimumProjectedNodeTextPx": 8,
+            "viewerChromeOk": true,
+            "resolvedTheme": "light",
+            "sha256": "c48d4220537af941a9651cb7cf09675d1a52b81e7d54054e236a81404c6ff67e",
+            "bytes": 163362
+          },
+          {
+            "width": 1440,
+            "height": 900,
+            "theme": "dark",
+            "ok": true,
+            "overflowX": false,
+            "overflowY": false,
+            "readabilityOk": true,
+            "minimumProjectedNodeTextPx": 8,
+            "viewerChromeOk": true,
+            "resolvedTheme": "dark",
+            "sha256": "aebcf3f1dd2b6a71b61983a6c9df6cec03e373d28fd6823dd85c46c106ee1f0a",
+            "bytes": 165971
+          },
+          {
+            "width": 2048,
+            "height": 1320,
+            "theme": "light",
+            "ok": true,
+            "overflowX": false,
+            "overflowY": false,
+            "readabilityOk": true,
+            "minimumProjectedNodeTextPx": 8,
+            "viewerChromeOk": true,
+            "resolvedTheme": "light",
+            "sha256": "c6014ba30dd000f467afc6791a1d559a49c2b60e23c65b0df1be1a3460ed7dee",
+            "bytes": 218647
+          },
+          {
+            "width": 2048,
+            "height": 1320,
+            "theme": "dark",
+            "ok": true,
+            "overflowX": false,
+            "overflowY": false,
+            "readabilityOk": true,
+            "minimumProjectedNodeTextPx": 8,
+            "viewerChromeOk": true,
+            "resolvedTheme": "dark",
+            "sha256": "e29a0d6c05187a67a1931c4192dd553844ddbfba1fbc9d7a70961812c3ef72e8",
+            "bytes": 222975
+          }
+        ]
+      },
+      "visual_review": "passed",
+      "correction_rounds": 0,
+      "perceptual_review": {
+        "reviewer": "Codex image-capable review",
+        "artifact_sha256": "ea36daa97ce687bfcc55e23e8d286294276d75508589f45bd70c4e74084303c6",
+        "screenshots_inspected": [
+          {
+            "width": 1440,
+            "height": 900,
+            "theme": "dark"
+          },
+          {
+            "width": 2048,
+            "height": 1320,
+            "theme": "light"
+          }
+        ],
+        "exported_png_inspected": true,
+        "observations": "Labels, node fit, routes, default READ composition and both color themes reviewed. Full-canvas PNG export reviewed without viewer controls or selection overlays."
+      },
+      "viewer_interactions": {
+        "focused": true,
+        "focusClosed": true,
+        "finderOpened": true,
+        "finderClosed": true
+      },
+      "exports": [
+        {
+          "format": "png",
+          "file": "03-media-production.png",
+          "bytes": 558853,
+          "sha256": "e9905ba5a10516bf3f1c3eb05f516b7c503d3b03933c910c5036eda32071ffd9",
+          "canonicalStateClean": true,
+          "width": 4584,
+          "height": 2184
+        },
+        {
+          "format": "svg",
+          "file": "03-media-production.svg",
+          "bytes": 60854,
+          "sha256": "ff1529fae3d97dbcb78288b143abb5c4b057f58f7b5ff2cf7d597edf7b9eadd9",
+          "canonicalStateClean": true
+        }
+      ]
+    },
+    {
+      "diagram_type": "sequence",
+      "title": "VerbaScene · 异步视频任务时序",
+      "output": "04-video-task-sequence.html",
+      "specification": "04-video-task-sequence.json",
+      "specification_sha256": "6f0ca0232dc011a7332f7b5a62d518b242aade2a1231ca171d21e387eb51227c",
+      "specification_bytes": 4201,
+      "artifact_sha256": "24eea294953943af9d572b80c12f8437ac560f862b19beef843486001b6b422a",
+      "artifact_bytes": 713118,
+      "validation": {
+        "checksPassed": 9,
+        "checkCount": 9,
+        "compositionProfile": "showcase",
+        "compositionStatus": "pass",
+        "errors": 0,
+        "warnings": 0
+      },
+      "source_evidence": null,
+      "browser_evidence": "passed",
+      "automated_browser": {
+        "evidenceKind": "automated-browser",
+        "status": "pass",
+        "state": {
+          "detail": "read",
+          "motion": "still"
+        },
+        "artifact_sha256": "24eea294953943af9d572b80c12f8437ac560f862b19beef843486001b6b422a",
+        "visualReview": "pending",
+        "diagnostics": [],
+        "viewports": [
+          {
+            "width": 1440,
+            "height": 900,
+            "theme": "light",
+            "ok": true,
+            "overflowX": false,
+            "overflowY": false,
+            "readabilityOk": true,
+            "minimumProjectedNodeTextPx": 7,
+            "viewerChromeOk": true,
+            "resolvedTheme": "light"
+          },
+          {
+            "width": 1600,
+            "height": 1000,
+            "theme": "light",
+            "ok": true,
+            "overflowX": false,
+            "overflowY": false,
+            "readabilityOk": true,
+            "minimumProjectedNodeTextPx": 7,
+            "viewerChromeOk": true,
+            "resolvedTheme": "light"
+          },
+          {
+            "width": 1920,
+            "height": 1080,
+            "theme": "light",
+            "ok": true,
+            "overflowX": false,
+            "overflowY": false,
+            "readabilityOk": true,
+            "minimumProjectedNodeTextPx": 7,
+            "viewerChromeOk": true,
+            "resolvedTheme": "light"
+          },
+          {
+            "width": 2048,
+            "height": 1320,
+            "theme": "light",
+            "ok": true,
+            "overflowX": false,
+            "overflowY": false,
+            "readabilityOk": true,
+            "minimumProjectedNodeTextPx": 7,
+            "viewerChromeOk": true,
+            "resolvedTheme": "light"
+          }
+        ],
+        "captures": [
+          {
+            "width": 1440,
+            "height": 900,
+            "theme": "light",
+            "ok": true,
+            "overflowX": false,
+            "overflowY": false,
+            "readabilityOk": true,
+            "minimumProjectedNodeTextPx": 7,
+            "viewerChromeOk": true,
+            "resolvedTheme": "light",
+            "sha256": "db5d53f71cfd362cd6b5945169a613e6b26ca3e0b71d7e2576b66d710564f4dc",
+            "bytes": 127189
+          },
+          {
+            "width": 1440,
+            "height": 900,
+            "theme": "dark",
+            "ok": true,
+            "overflowX": false,
+            "overflowY": false,
+            "readabilityOk": true,
+            "minimumProjectedNodeTextPx": 7,
+            "viewerChromeOk": true,
+            "resolvedTheme": "dark",
+            "sha256": "40c702ab1f9c2a2fcbaa969e3b42439502a428da44cf8f0562a088e407224f1a",
+            "bytes": 128357
+          },
+          {
+            "width": 2048,
+            "height": 1320,
+            "theme": "light",
+            "ok": true,
+            "overflowX": false,
+            "overflowY": false,
+            "readabilityOk": true,
+            "minimumProjectedNodeTextPx": 7,
+            "viewerChromeOk": true,
+            "resolvedTheme": "light",
+            "sha256": "d7085ce53cd30c28b46e68ff66013b07e0366b3dd4314899d8b4341a4d6191b9",
+            "bytes": 160448
+          },
+          {
+            "width": 2048,
+            "height": 1320,
+            "theme": "dark",
+            "ok": true,
+            "overflowX": false,
+            "overflowY": false,
+            "readabilityOk": true,
+            "minimumProjectedNodeTextPx": 7,
+            "viewerChromeOk": true,
+            "resolvedTheme": "dark",
+            "sha256": "5535b9b7d460d0312e0a9834ba5c05ba2db55e69157f30758496716db403ad52",
+            "bytes": 162295
+          }
+        ]
+      },
+      "visual_review": "passed",
+      "correction_rounds": 1,
+      "perceptual_review": {
+        "reviewer": "Codex image-capable review",
+        "artifact_sha256": "24eea294953943af9d572b80c12f8437ac560f862b19beef843486001b6b422a",
+        "screenshots_inspected": [
+          {
+            "width": 1440,
+            "height": 900,
+            "theme": "dark"
+          },
+          {
+            "width": 2048,
+            "height": 1320,
+            "theme": "light"
+          }
+        ],
+        "exported_png_inspected": true,
+        "observations": "Labels, node fit, routes, default READ composition and both color themes reviewed. Full-canvas PNG export reviewed without viewer controls or selection overlays."
+      },
+      "viewer_interactions": {
+        "focused": true,
+        "focusClosed": true,
+        "finderOpened": true,
+        "finderClosed": true
+      },
+      "exports": [
+        {
+          "format": "png",
+          "file": "04-video-task-sequence.png",
+          "bytes": 457795,
+          "sha256": "8e4edc0d08a7840ce445e9199bb55f5097a5b5ed2608552c988946069d2acd25",
+          "canonicalStateClean": true,
+          "width": 4320,
+          "height": 2200
+        },
+        {
+          "format": "svg",
+          "file": "04-video-task-sequence.svg",
+          "bytes": 57189,
+          "sha256": "b38bf2c23e6963e9797fbcf3b75b54a6b441cd9378018b3b0717d2385cb43c44",
+          "canonicalStateClean": true
+        }
+      ]
+    },
+    {
+      "diagram_type": "dataflow",
+      "title": "VerbaScene · 资产来源与版本关系",
+      "output": "05-asset-lineage.html",
+      "specification": "05-asset-lineage.json",
+      "specification_sha256": "0faf498e83fbf054e28326a1dc75e607d5988d1175a365ccb008646619af3615",
+      "specification_bytes": 5312,
+      "artifact_sha256": "865fe7be7dd82becaa0681934354773e946ea2a1b23ee9c8b45d7cebf5f20b6a",
+      "artifact_bytes": 715989,
+      "validation": {
+        "checksPassed": 9,
+        "checkCount": 9,
+        "compositionProfile": "showcase",
+        "compositionStatus": "pass",
+        "errors": 0,
+        "warnings": 0
+      },
+      "source_evidence": null,
+      "browser_evidence": "passed",
+      "automated_browser": {
+        "evidenceKind": "automated-browser",
+        "status": "pass",
+        "state": {
+          "detail": "read",
+          "motion": "still"
+        },
+        "artifact_sha256": "865fe7be7dd82becaa0681934354773e946ea2a1b23ee9c8b45d7cebf5f20b6a",
+        "visualReview": "pending",
+        "diagnostics": [],
+        "viewports": [
+          {
+            "width": 1440,
+            "height": 900,
+            "theme": "light",
+            "ok": true,
+            "overflowX": false,
+            "overflowY": false,
+            "readabilityOk": true,
+            "minimumProjectedNodeTextPx": 6.449074074074074,
+            "viewerChromeOk": true,
+            "resolvedTheme": "light"
+          },
+          {
+            "width": 1600,
+            "height": 1000,
+            "theme": "light",
+            "ok": true,
+            "overflowX": false,
+            "overflowY": false,
+            "readabilityOk": true,
+            "minimumProjectedNodeTextPx": 6.701851851851852,
+            "viewerChromeOk": true,
+            "resolvedTheme": "light"
+          },
+          {
+            "width": 1920,
+            "height": 1080,
+            "theme": "light",
+            "ok": true,
+            "overflowX": false,
+            "overflowY": false,
+            "readabilityOk": true,
+            "minimumProjectedNodeTextPx": 7,
+            "viewerChromeOk": true,
+            "resolvedTheme": "light"
+          },
+          {
+            "width": 2048,
+            "height": 1320,
+            "theme": "light",
+            "ok": true,
+            "overflowX": false,
+            "overflowY": false,
+            "readabilityOk": true,
+            "minimumProjectedNodeTextPx": 7,
+            "viewerChromeOk": true,
+            "resolvedTheme": "light"
+          }
+        ],
+        "captures": [
+          {
+            "width": 1440,
+            "height": 900,
+            "theme": "light",
+            "ok": true,
+            "overflowX": false,
+            "overflowY": false,
+            "readabilityOk": true,
+            "minimumProjectedNodeTextPx": 6.449074074074074,
+            "viewerChromeOk": true,
+            "resolvedTheme": "light",
+            "sha256": "509bf903a8605f555bcc395e3cc3b153894f604eaa35662dc3f1263d484b4c4a",
+            "bytes": 137708
+          },
+          {
+            "width": 1440,
+            "height": 900,
+            "theme": "dark",
+            "ok": true,
+            "overflowX": false,
+            "overflowY": false,
+            "readabilityOk": true,
+            "minimumProjectedNodeTextPx": 6.449074074074074,
+            "viewerChromeOk": true,
+            "resolvedTheme": "dark",
+            "sha256": "e41e5b9e85d995996cf9d547b238111ba61e49fce324fa3af959fd30c1ee33ad",
+            "bytes": 140981
+          },
+          {
+            "width": 2048,
+            "height": 1320,
+            "theme": "light",
+            "ok": true,
+            "overflowX": false,
+            "overflowY": false,
+            "readabilityOk": true,
+            "minimumProjectedNodeTextPx": 7,
+            "viewerChromeOk": true,
+            "resolvedTheme": "light",
+            "sha256": "9c13a4da91d5917426fed989c1f343330ca5c77e03fb1f06be2b2b520ec12daf",
+            "bytes": 172796
+          },
+          {
+            "width": 2048,
+            "height": 1320,
+            "theme": "dark",
+            "ok": true,
+            "overflowX": false,
+            "overflowY": false,
+            "readabilityOk": true,
+            "minimumProjectedNodeTextPx": 7,
+            "viewerChromeOk": true,
+            "resolvedTheme": "dark",
+            "sha256": "3ee0a2809df73423482eef5f7f0fb7cab4c39718935b144f2e1cc6055af0e975",
+            "bytes": 177980
+          }
+        ]
+      },
+      "visual_review": "passed",
+      "correction_rounds": 0,
+      "perceptual_review": {
+        "reviewer": "Codex image-capable review",
+        "artifact_sha256": "865fe7be7dd82becaa0681934354773e946ea2a1b23ee9c8b45d7cebf5f20b6a",
+        "screenshots_inspected": [
+          {
+            "width": 1440,
+            "height": 900,
+            "theme": "dark"
+          },
+          {
+            "width": 2048,
+            "height": 1320,
+            "theme": "light"
+          }
+        ],
+        "exported_png_inspected": true,
+        "observations": "Labels, node fit, routes, default READ composition and both color themes reviewed. Full-canvas PNG export reviewed without viewer controls or selection overlays."
+      },
+      "viewer_interactions": {
+        "focused": true,
+        "focusClosed": true,
+        "finderOpened": true,
+        "finderClosed": true
+      },
+      "exports": [
+        {
+          "format": "png",
+          "file": "05-asset-lineage.png",
+          "bytes": 492086,
+          "sha256": "12c3c271f8eea05a9e7393593cf2225d5a5c8c9f30ec1cfb3e18a3e926da4ce4",
+          "canonicalStateClean": true,
+          "width": 4320,
+          "height": 2640
+        },
+        {
+          "format": "svg",
+          "file": "05-asset-lineage.svg",
+          "bytes": 59254,
+          "sha256": "f355a8da3375f403034c13c9c29323470f71bebe0daa6dc14dd52240411fa793",
+          "canonicalStateClean": true
+        }
+      ]
+    },
+    {
+      "diagram_type": "lifecycle",
+      "title": "VerbaScene · 任务状态与恢复边界",
+      "output": "06-task-lifecycle.html",
+      "specification": "06-task-lifecycle.json",
+      "specification_sha256": "5a1b5b98ba78ebc12a0bda12e2b86bf084bcc8b0fef11822ee2964be7923669f",
+      "specification_bytes": 3690,
+      "artifact_sha256": "9dcaa5432efcde2364550cb05d433142eaefb1a7686bd6e063b9f91cab06862c",
+      "artifact_bytes": 709299,
+      "validation": {
+        "checksPassed": 9,
+        "checkCount": 9,
+        "compositionProfile": "showcase",
+        "compositionStatus": "pass",
+        "errors": 0,
+        "warnings": 0
+      },
+      "source_evidence": null,
+      "browser_evidence": "passed",
+      "automated_browser": {
+        "evidenceKind": "automated-browser",
+        "status": "pass",
+        "state": {
+          "detail": "read",
+          "motion": "still"
+        },
+        "artifact_sha256": "9dcaa5432efcde2364550cb05d433142eaefb1a7686bd6e063b9f91cab06862c",
+        "visualReview": "pending",
+        "diagnostics": [],
+        "viewports": [
+          {
+            "width": 1440,
+            "height": 900,
+            "theme": "light",
+            "ok": true,
+            "overflowX": false,
+            "overflowY": false,
+            "readabilityOk": true,
+            "minimumProjectedNodeTextPx": 10,
+            "viewerChromeOk": true,
+            "resolvedTheme": "light"
+          },
+          {
+            "width": 1600,
+            "height": 1000,
+            "theme": "light",
+            "ok": true,
+            "overflowX": false,
+            "overflowY": false,
+            "readabilityOk": true,
+            "minimumProjectedNodeTextPx": 10,
+            "viewerChromeOk": true,
+            "resolvedTheme": "light"
+          },
+          {
+            "width": 1920,
+            "height": 1080,
+            "theme": "light",
+            "ok": true,
+            "overflowX": false,
+            "overflowY": false,
+            "readabilityOk": true,
+            "minimumProjectedNodeTextPx": 10,
+            "viewerChromeOk": true,
+            "resolvedTheme": "light"
+          },
+          {
+            "width": 2048,
+            "height": 1320,
+            "theme": "light",
+            "ok": true,
+            "overflowX": false,
+            "overflowY": false,
+            "readabilityOk": true,
+            "minimumProjectedNodeTextPx": 10,
+            "viewerChromeOk": true,
+            "resolvedTheme": "light"
+          }
+        ],
+        "captures": [
+          {
+            "width": 1440,
+            "height": 900,
+            "theme": "light",
+            "ok": true,
+            "overflowX": false,
+            "overflowY": false,
+            "readabilityOk": true,
+            "minimumProjectedNodeTextPx": 10,
+            "viewerChromeOk": true,
+            "resolvedTheme": "light",
+            "sha256": "10f628632f64ed64048d6e694602a0f83dcc6a38822ffca2cc630a6ab2c07d2e",
+            "bytes": 105044
+          },
+          {
+            "width": 1440,
+            "height": 900,
+            "theme": "dark",
+            "ok": true,
+            "overflowX": false,
+            "overflowY": false,
+            "readabilityOk": true,
+            "minimumProjectedNodeTextPx": 10,
+            "viewerChromeOk": true,
+            "resolvedTheme": "dark",
+            "sha256": "0c79a951955908bedadf49366b735ec5799ef343c4c48a034a02a6fbde72af54",
+            "bytes": 106423
+          },
+          {
+            "width": 2048,
+            "height": 1320,
+            "theme": "light",
+            "ok": true,
+            "overflowX": false,
+            "overflowY": false,
+            "readabilityOk": true,
+            "minimumProjectedNodeTextPx": 10,
+            "viewerChromeOk": true,
+            "resolvedTheme": "light",
+            "sha256": "76e64ae319a27b977f7ab978b54007ef165decae7a3fefc334c29ff6a34deaa3",
+            "bytes": 142201
+          },
+          {
+            "width": 2048,
+            "height": 1320,
+            "theme": "dark",
+            "ok": true,
+            "overflowX": false,
+            "overflowY": false,
+            "readabilityOk": true,
+            "minimumProjectedNodeTextPx": 10,
+            "viewerChromeOk": true,
+            "resolvedTheme": "dark",
+            "sha256": "ef1b6d903d1a5608b37fc19bbaa3af7d8d65c1dfe2a69c148c91f48285a4e644",
+            "bytes": 144143
+          }
+        ]
+      },
+      "visual_review": "passed",
+      "correction_rounds": 1,
+      "perceptual_review": {
+        "reviewer": "Codex image-capable review",
+        "artifact_sha256": "9dcaa5432efcde2364550cb05d433142eaefb1a7686bd6e063b9f91cab06862c",
+        "screenshots_inspected": [
+          {
+            "width": 1440,
+            "height": 900,
+            "theme": "dark"
+          },
+          {
+            "width": 2048,
+            "height": 1320,
+            "theme": "light"
+          }
+        ],
+        "exported_png_inspected": true,
+        "observations": "Labels, node fit, routes, default READ composition and both color themes reviewed. Full-canvas PNG export reviewed without viewer controls or selection overlays."
+      },
+      "viewer_interactions": {
+        "focused": true,
+        "focusClosed": true,
+        "finderOpened": true,
+        "finderClosed": true
+      },
+      "exports": [
+        {
+          "format": "png",
+          "file": "06-task-lifecycle.png",
+          "bytes": 452935,
+          "sha256": "7ef7e26dd3f7b6bf1957e6f53a251e3c0ff7462ac4029911ddcfa962f1d57fe3",
+          "canonicalStateClean": true,
+          "width": 5120,
+          "height": 2544
+        },
+        {
+          "format": "svg",
+          "file": "06-task-lifecycle.svg",
+          "bytes": 52895,
+          "sha256": "091dc6634cb0eb9ae0e5669ade59322d0317cda14d4c69e8b20fd92098a623e2",
+          "canonicalStateClean": true
+        }
+      ]
+    }
+  ],
+  "gallery": {
+    "output": "index.html",
+    "sha256": "92a40c11707bb6e5e3c2f88154145296cc739a6f6e9ec09c4813d217a63ff093",
+    "status": "passed",
+    "viewports": [
+      {
+        "width": 1440,
+        "height": 1000,
+        "scrollWidth": 1440,
+        "scrollHeight": 2091,
+        "cards": 6
+      },
+      {
+        "width": 390,
+        "height": 844,
+        "scrollWidth": 390,
+        "scrollHeight": 3037,
+        "cards": 6
+      }
+    ],
+    "loaded_images": 6
+  }
+}

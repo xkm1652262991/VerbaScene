@@ -1,0 +1,259 @@
+{
+  "schema_version": 2,
+  "diagram_type": "workflow",
+  "meta": {
+    "title": "VerbaScene · 剧本与反思式分镜",
+    "locale": "zh-CN",
+    "quality_profile": "showcase"
+  },
+  "lanes": [
+    {
+      "id": "writing",
+      "label": "剧本生成任务"
+    },
+    {
+      "id": "directing",
+      "label": "分镜导演任务"
+    }
+  ],
+  "mainPath": [
+    "creative-source",
+    "story-plan",
+    "screenplay",
+    "script-critic",
+    "script-repair",
+    "script-contract"
+  ],
+  "nodes": [
+    {
+      "id": "creative-source",
+      "lane": "writing",
+      "col": 0,
+      "type": "frontend",
+      "label": "创作输入",
+      "sublabel": "创意 / 原稿与设置",
+      "width": 132,
+      "height": 110,
+      "yOffset": 30
+    },
+    {
+      "id": "story-plan",
+      "lane": "writing",
+      "col": 1,
+      "type": "backend",
+      "label": "故事蓝图",
+      "sublabel": "主线 · 场景 · 必选短语",
+      "width": 132,
+      "height": 110,
+      "yOffset": 30
+    },
+    {
+      "id": "screenplay",
+      "lane": "writing",
+      "col": 2,
+      "type": "backend",
+      "label": "结构化剧本初稿",
+      "sublabel": "场景 / 英文对白 / 动作",
+      "width": 132,
+      "height": 110,
+      "yOffset": 30
+    },
+    {
+      "id": "script-critic",
+      "lane": "writing",
+      "col": 3,
+      "type": "backend",
+      "label": "综合审稿",
+      "sublabel": "模型审稿 + 确定性规则",
+      "width": 132,
+      "height": 110,
+      "yOffset": 30
+    },
+    {
+      "id": "script-repair",
+      "lane": "writing",
+      "col": 4,
+      "type": "backend",
+      "label": "按需定点修订",
+      "sublabel": "仅替换被定位的场景",
+      "width": 132,
+      "height": 110,
+      "yOffset": 30
+    },
+    {
+      "id": "script-contract",
+      "lane": "writing",
+      "col": 5,
+      "type": "database",
+      "label": "剧本合同与版本",
+      "sublabel": "保留轨迹 + 质量提示",
+      "width": 132,
+      "height": 110,
+      "yOffset": 30
+    },
+    {
+      "id": "director-source",
+      "lane": "directing",
+      "col": 0,
+      "type": "database",
+      "label": "导演输入快照",
+      "sublabel": "当前剧本 / 实体 / 参考图",
+      "width": 132,
+      "height": 110,
+      "yOffset": 30
+    },
+    {
+      "id": "asset-observation",
+      "lane": "directing",
+      "col": 1,
+      "type": "backend",
+      "label": "资产元数据检查",
+      "sublabel": "引用可用性 / 观察报告",
+      "width": 132,
+      "height": 110,
+      "yOffset": 30
+    },
+    {
+      "id": "shot-draft",
+      "lane": "directing",
+      "col": 2,
+      "type": "backend",
+      "label": "分镜草案",
+      "sublabel": "Shot / beats + 初次检查",
+      "width": 132,
+      "height": 110,
+      "yOffset": 30
+    },
+    {
+      "id": "shot-reflection",
+      "lane": "directing",
+      "col": 3,
+      "type": "backend",
+      "label": "分镜反思",
+      "sublabel": "连续性 / 对白 / 引用依据",
+      "width": 132,
+      "height": 110,
+      "yOffset": 30
+    },
+    {
+      "id": "shot-patch",
+      "lane": "directing",
+      "col": 4,
+      "type": "backend",
+      "label": "受限 ShotPatch",
+      "sublabel": "按定位与允许操作修改",
+      "width": 132,
+      "height": 110,
+      "yOffset": 30
+    },
+    {
+      "id": "shot-contract",
+      "lane": "directing",
+      "col": 5,
+      "type": "database",
+      "label": "校验后写入新批次",
+      "sublabel": "Shot / Dialogue / Prompt",
+      "width": 132,
+      "height": 110,
+      "yOffset": 30
+    }
+  ],
+  "edges": [
+    {
+      "id": "creative-source-to-story-plan",
+      "from": "creative-source",
+      "to": "story-plan",
+      "label": "冻结输入",
+      "variant": "emphasis"
+    },
+    {
+      "id": "story-plan-to-screenplay",
+      "from": "story-plan",
+      "to": "screenplay",
+      "label": "蓝图约束",
+      "variant": "emphasis"
+    },
+    {
+      "id": "screenplay-to-script-critic",
+      "from": "screenplay",
+      "to": "script-critic",
+      "label": "审阅初稿",
+      "variant": "emphasis"
+    },
+    {
+      "id": "script-critic-to-script-repair",
+      "from": "script-critic",
+      "to": "script-repair",
+      "label": "需要修订时",
+      "variant": "emphasis"
+    },
+    {
+      "id": "script-repair-to-script-contract",
+      "from": "script-repair",
+      "to": "script-contract",
+      "label": "最终候选",
+      "variant": "emphasis"
+    },
+    {
+      "id": "director-source-to-asset-observation",
+      "from": "director-source",
+      "to": "asset-observation",
+      "label": "核对资产",
+      "variant": "emphasis"
+    },
+    {
+      "id": "asset-observation-to-shot-draft",
+      "from": "asset-observation",
+      "to": "shot-draft",
+      "label": "携带报告",
+      "variant": "emphasis"
+    },
+    {
+      "id": "shot-draft-to-shot-reflection",
+      "from": "shot-draft",
+      "to": "shot-reflection",
+      "label": "草案与规则报告",
+      "variant": "emphasis"
+    },
+    {
+      "id": "shot-reflection-to-shot-patch",
+      "from": "shot-reflection",
+      "to": "shot-patch",
+      "label": "存在有效问题时",
+      "variant": "emphasis"
+    },
+    {
+      "id": "shot-patch-to-shot-contract",
+      "from": "shot-patch",
+      "to": "shot-contract",
+      "label": "重新校验",
+      "variant": "emphasis"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "两次独立的创作动作",
+      "items": [
+        "分镜任务读取当前剧本、实体与资产快照，由用户主动发起。",
+        "上下两行分别是剧本与分镜任务；不是同一次自动串行任务。"
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "保留有效稿与完整轨迹",
+      "items": [
+        "无需修订时直接采用初稿；审稿不可用或 Patch 无效时保留有效稿。",
+        "初稿解析失败仅尝试结构恢复；每次模型调用前后持久化检查点。"
+      ]
+    },
+    {
+      "dot": "violet",
+      "title": "合同约束与可编辑结果",
+      "items": [
+        "分镜最终合同无效则任务失败，旧批次保持不变。",
+        "分镜输出进入可编辑工作台；后续 Prompt 重编译由用户发起。"
+      ]
+    }
+  ]
+}

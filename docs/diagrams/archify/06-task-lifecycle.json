@@ -1,0 +1,181 @@
+{
+  "schema_version": 1,
+  "diagram_type": "lifecycle",
+  "meta": {
+    "title": "VerbaScene · 任务状态与恢复边界",
+    "locale": "zh-CN",
+    "quality_profile": "showcase",
+    "viewBox": [
+      1280,
+      636
+    ]
+  },
+  "lanes": [
+    {
+      "id": "main",
+      "label": "普通子任务主路径"
+    },
+    {
+      "id": "waiting",
+      "label": "活动等待与父任务"
+    },
+    {
+      "id": "terminal",
+      "label": "失败与取消终态"
+    }
+  ],
+  "states": [
+    {
+      "id": "task-queued",
+      "type": "start",
+      "label": "queued",
+      "lane": "main",
+      "col": 0,
+      "width": 108,
+      "height": 64
+    },
+    {
+      "id": "task-running",
+      "type": "active",
+      "label": "running",
+      "lane": "main",
+      "col": 2,
+      "width": 136,
+      "height": 64
+    },
+    {
+      "id": "task-succeeded",
+      "type": "success",
+      "label": "succeeded",
+      "lane": "main",
+      "col": 4,
+      "width": 136,
+      "height": 64
+    },
+    {
+      "id": "provider-wait",
+      "type": "waiting",
+      "label": "waiting_provider",
+      "lane": "waiting",
+      "col": 0,
+      "width": 136,
+      "height": 64
+    },
+    {
+      "id": "cancel-inflight",
+      "type": "waiting",
+      "label": "cancelling",
+      "lane": "waiting",
+      "col": 1,
+      "width": 136,
+      "height": 64
+    },
+    {
+      "id": "children-wait",
+      "type": "waiting",
+      "label": "waiting_children",
+      "lane": "waiting",
+      "col": 2,
+      "width": 136,
+      "height": 64
+    },
+    {
+      "id": "task-failed",
+      "type": "failure",
+      "label": "failed",
+      "lane": "terminal",
+      "col": 0,
+      "width": 136,
+      "height": 64
+    },
+    {
+      "id": "task-cancelled",
+      "type": "neutral",
+      "label": "cancelled",
+      "lane": "terminal",
+      "col": 1,
+      "width": 136,
+      "height": 64
+    }
+  ],
+  "transitions": [
+    {
+      "id": "remote-accepted",
+      "from": "task-running",
+      "to": "provider-wait",
+      "label": "远端受理",
+      "labelAt": [
+        402,
+        216
+      ]
+    },
+    {
+      "id": "fetch-ready",
+      "from": "provider-wait",
+      "to": "task-running",
+      "label": "获取结果",
+      "variant": "emphasis",
+      "fromSide": "left",
+      "toSide": "left",
+      "route": "left-channel"
+    },
+    {
+      "id": "request-cancel",
+      "from": "task-running",
+      "to": "cancel-inflight",
+      "label": "请求取消"
+    },
+    {
+      "id": "cancel-done",
+      "from": "cancel-inflight",
+      "to": "task-cancelled",
+      "label": "取消完成",
+      "labelAt": [
+        556,
+        356
+      ]
+    },
+    {
+      "id": "provider-failed",
+      "from": "provider-wait",
+      "to": "task-failed",
+      "label": "不可恢复错误",
+      "labelAt": [
+        402,
+        356
+      ]
+    },
+    {
+      "id": "children-succeeded",
+      "from": "children-wait",
+      "to": "task-succeeded",
+      "label": "全部成功"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "emerald",
+      "title": "领取与等待",
+      "items": [
+        "原子领取后执行；远端受理后等待并轮询。",
+        "父任务可直接创建为 waiting_children。"
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "重启与重试",
+      "items": [
+        "过期租约才恢复；提交未知则失败。",
+        "明确未提交可重试；人工重试创建新任务。"
+      ]
+    },
+    {
+      "dot": "rose",
+      "title": "其他终态分支",
+      "items": [
+        "排队取消直接终止；运行错误可直接失败。",
+        "父任务汇总子任务；终态清空去重键与租约。"
+      ]
+    }
+  ]
+}

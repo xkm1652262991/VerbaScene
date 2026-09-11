@@ -1,0 +1,314 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "VerbaScene · 系统运行架构",
+    "locale": "zh-CN",
+    "quality_profile": "showcase",
+    "repository": {
+      "url": "https://github.com/xkm1652262991/VerbaScene",
+      "revision": "6929b68d389f7f12454d90849461c3b7c4746e16"
+    }
+  },
+  "layout": {
+    "mode": "grid",
+    "origin": [
+      50,
+      80
+    ],
+    "cols": 5,
+    "cellW": 160,
+    "cellH": 86,
+    "gapX": 90,
+    "gapY": 148
+  },
+  "components": [
+    {
+      "id": "studio-web",
+      "type": "frontend",
+      "label": "React 工作台",
+      "sublabel": "TypeScript · Vite / Nginx",
+      "row": 1,
+      "col": 0,
+      "sources": [
+        {
+          "path": "apps/web/src/App.tsx"
+        },
+        {
+          "path": "docker/nginx.conf"
+        }
+      ],
+      "size": [
+        160,
+        72
+      ]
+    },
+    {
+      "id": "http-api",
+      "type": "backend",
+      "label": "FastAPI 接口",
+      "sublabel": "参数校验 · 聚合读取",
+      "row": 1,
+      "col": 1,
+      "sources": [
+        {
+          "path": "apps/api/app/main.py"
+        },
+        {
+          "path": "apps/api/app/api/router.py"
+        }
+      ],
+      "size": [
+        160,
+        72
+      ]
+    },
+    {
+      "id": "domain-services",
+      "type": "backend",
+      "label": "生产领域服务",
+      "sublabel": "剧本 · 资产 · 制作 · 导出",
+      "row": 1,
+      "col": 2,
+      "sources": [
+        {
+          "path": "apps/api/app/scripts/service.py"
+        },
+        {
+          "path": "apps/api/app/production/video_tasks.py"
+        },
+        {
+          "path": "apps/api/app/exports/export_tasks.py"
+        }
+      ],
+      "size": [
+        160,
+        72
+      ]
+    },
+    {
+      "id": "task-runtime",
+      "type": "backend",
+      "label": "本地任务运行时",
+      "sublabel": "租约领取 · 心跳 · 恢复",
+      "row": 1,
+      "col": 3,
+      "sources": [
+        {
+          "path": "apps/api/app/platform/tasks/runtime.py"
+        },
+        {
+          "path": "apps/api/app/platform/tasks/repository.py"
+        }
+      ],
+      "size": [
+        160,
+        72
+      ]
+    },
+    {
+      "id": "model-adapters",
+      "type": "backend",
+      "label": "Provider Adapter",
+      "sublabel": "LLM / Image / Video",
+      "row": 1,
+      "col": 4,
+      "sources": [
+        {
+          "path": "apps/api/app/providers/base.py"
+        },
+        {
+          "path": "apps/api/app/providers/registry.py"
+        }
+      ],
+      "size": [
+        160,
+        72
+      ]
+    },
+    {
+      "id": "configured-models",
+      "type": "external",
+      "label": "配置的模型服务",
+      "sublabel": "远程端点或本地模型",
+      "row": 0,
+      "col": 4,
+      "size": [
+        160,
+        72
+      ]
+    },
+    {
+      "id": "relational-state",
+      "type": "database",
+      "label": "SQLite / PostgreSQL",
+      "sublabel": "业务版本 · 任务状态",
+      "row": 0,
+      "col": 2,
+      "sources": [
+        {
+          "path": "apps/api/app/db/session.py"
+        },
+        {
+          "path": "apps/api/app/models/asset.py"
+        }
+      ],
+      "size": [
+        160,
+        72
+      ]
+    },
+    {
+      "id": "media-files",
+      "type": "database",
+      "label": "LocalMediaStore",
+      "sublabel": "参考图 · 视频 · 成片",
+      "row": 2,
+      "col": 2,
+      "sources": [
+        {
+          "path": "apps/api/app/platform/media/store.py"
+        }
+      ],
+      "size": [
+        160,
+        72
+      ]
+    },
+    {
+      "id": "media-process",
+      "type": "backend",
+      "label": "FFmpeg / ffprobe",
+      "sublabel": "截帧 · 原生音轨 · 字幕",
+      "row": 2,
+      "col": 3,
+      "sources": [
+        {
+          "path": "apps/api/app/exports/task_handler.py"
+        },
+        {
+          "path": "apps/api/app/platform/media/subprocess_runner.py"
+        }
+      ],
+      "size": [
+        160,
+        72
+      ]
+    }
+  ],
+  "connections": [
+    {
+      "id": "web-http",
+      "from": "studio-web",
+      "to": "http-api",
+      "label": "HTTP / JSON",
+      "variant": "emphasis"
+    },
+    {
+      "id": "api-domain",
+      "from": "http-api",
+      "to": "domain-services",
+      "label": "服务调用",
+      "variant": "emphasis"
+    },
+    {
+      "id": "domain-task",
+      "from": "domain-services",
+      "to": "task-runtime",
+      "label": "创建任务",
+      "variant": "dashed"
+    },
+    {
+      "id": "task-adapter",
+      "from": "task-runtime",
+      "to": "model-adapters",
+      "label": "Handler 调用",
+      "variant": "emphasis"
+    },
+    {
+      "id": "adapter-model",
+      "from": "model-adapters",
+      "to": "configured-models",
+      "label": "提交 / 轮询",
+      "fromSide": "top",
+      "toSide": "bottom"
+    },
+    {
+      "id": "domain-state",
+      "from": "domain-services",
+      "to": "relational-state",
+      "label": "短事务",
+      "fromSide": "top",
+      "toSide": "bottom"
+    },
+    {
+      "id": "runtime-state",
+      "from": "task-runtime",
+      "to": "relational-state",
+      "label": "租约 / 状态",
+      "fromSide": "top",
+      "toSide": "right"
+    },
+    {
+      "id": "domain-media",
+      "from": "domain-services",
+      "to": "media-files",
+      "label": "媒体读写",
+      "fromSide": "bottom",
+      "toSide": "top",
+      "labelAt": [
+        630,
+        416
+      ]
+    },
+    {
+      "id": "runtime-ffmpeg",
+      "from": "task-runtime",
+      "to": "media-process",
+      "label": "可取消子进程",
+      "fromSide": "bottom",
+      "toSide": "top",
+      "labelAt": [
+        880,
+        416
+      ]
+    },
+    {
+      "id": "ffmpeg-media",
+      "from": "media-process",
+      "to": "media-files",
+      "label": "落盘",
+      "fromSide": "left",
+      "toSide": "right"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "工作台与业务边界",
+      "items": [
+        "三个工作区自由导航；任务中心查询实际进度。",
+        "候选经人工采用成为正式版本；上游变更仅提示 Prompt 过期。",
+        "图中服务和 Worker 属于同一 API 进程。"
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "运行与持久化",
+      "items": [
+        "GenerationTask 是任务真相源；进程内事件仅唤醒。",
+        "文本默认并发 2、可配 1–4；图片 / 视频最高 2；媒体 1。",
+        "原生本地使用 SQLite；Compose 默认 PostgreSQL 17。"
+      ]
+    },
+    {
+      "dot": "violet",
+      "title": "模型与交付",
+      "items": [
+        "能力协商决定参考输入、时长、分辨率与原生音频。",
+        "模型生成媒体先进入候选；FFmpeg 按采用版本导出。",
+        "当前为单 API 进程部署；认证、多实例和对象存储待演进。"
+      ]
+    }
+  ]
+}

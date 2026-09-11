@@ -1,0 +1,235 @@
+{
+  "schema_version": 1,
+  "diagram_type": "dataflow",
+  "meta": {
+    "title": "VerbaScene · 资产来源与版本关系",
+    "locale": "zh-CN",
+    "quality_profile": "showcase",
+    "viewBox": [
+      1080,
+      660
+    ]
+  },
+  "stages": [
+    {
+      "label": "创作来源"
+    },
+    {
+      "label": "生产输入"
+    },
+    {
+      "label": "任务快照"
+    },
+    {
+      "label": "候选审核"
+    },
+    {
+      "label": "正式产物"
+    }
+  ],
+  "nodes": [
+    {
+      "id": "source-project",
+      "stage": 0,
+      "row": 2,
+      "type": "database",
+      "label": "Project / Chapter",
+      "sublabel": "创作输入与项目设置",
+      "width": 140,
+      "height": 68
+    },
+    {
+      "id": "versioned-script",
+      "stage": 0,
+      "row": 0,
+      "type": "database",
+      "label": "Script / Dialogue",
+      "sublabel": "剧本版本与英文对白",
+      "width": 140,
+      "height": 68
+    },
+    {
+      "id": "shot-inputs",
+      "stage": 1,
+      "row": 0,
+      "type": "database",
+      "label": "Shot / beats",
+      "sublabel": "视频片段与镜头节拍",
+      "width": 140,
+      "height": 68
+    },
+    {
+      "id": "reference-slots",
+      "stage": 1,
+      "row": 2,
+      "type": "database",
+      "label": "实体与参考资产",
+      "sublabel": "角色 / 场景 / 状态",
+      "width": 140,
+      "height": 68
+    },
+    {
+      "id": "frozen-task",
+      "stage": 2,
+      "row": 0,
+      "type": "database",
+      "label": "GenerationTask",
+      "sublabel": "冻结输入与任务来源",
+      "width": 140,
+      "height": 68
+    },
+    {
+      "id": "operation-audit",
+      "stage": 2,
+      "row": 2,
+      "type": "database",
+      "label": "运行审计",
+      "sublabel": "StageRun / 检查点",
+      "width": 140,
+      "height": 68
+    },
+    {
+      "id": "review-candidate",
+      "stage": 3,
+      "row": 0,
+      "type": "database",
+      "label": "AssetCandidate",
+      "sublabel": "待采用的媒体版本",
+      "width": 140,
+      "height": 68
+    },
+    {
+      "id": "rejected-candidate",
+      "stage": 3,
+      "row": 2,
+      "type": "database",
+      "label": "拒绝的候选",
+      "sublabel": "保留记录与来源",
+      "width": 140,
+      "height": 68
+    },
+    {
+      "id": "adopted-asset",
+      "stage": 4,
+      "row": 0,
+      "type": "database",
+      "label": "Asset",
+      "sublabel": "正式版本与当前选择",
+      "width": 140,
+      "height": 68
+    },
+    {
+      "id": "export-record",
+      "stage": 4,
+      "row": 2,
+      "type": "database",
+      "label": "Export / manifest",
+      "sublabel": "成片及冻结的时间线",
+      "width": 140,
+      "height": 68
+    }
+  ],
+  "flows": [
+    {
+      "id": "source-project-to-versioned-script",
+      "from": "source-project",
+      "to": "versioned-script",
+      "label": "创作来源",
+      "variant": "default"
+    },
+    {
+      "id": "versioned-script-to-shot-inputs",
+      "from": "versioned-script",
+      "to": "shot-inputs",
+      "label": "来源剧本",
+      "variant": "emphasis"
+    },
+    {
+      "id": "reference-slots-to-shot-inputs",
+      "from": "reference-slots",
+      "to": "shot-inputs",
+      "label": "引用版本",
+      "variant": "default"
+    },
+    {
+      "id": "shot-inputs-to-frozen-task",
+      "from": "shot-inputs",
+      "to": "frozen-task",
+      "label": "冻结副本",
+      "variant": "emphasis"
+    },
+    {
+      "id": "frozen-task-to-review-candidate",
+      "from": "frozen-task",
+      "to": "review-candidate",
+      "label": "产物来源",
+      "variant": "emphasis"
+    },
+    {
+      "id": "frozen-task-to-operation-audit",
+      "from": "frozen-task",
+      "to": "operation-audit",
+      "label": "任务关联",
+      "variant": "default",
+      "labelAt": [
+        530,
+        210
+      ]
+    },
+    {
+      "id": "review-candidate-to-adopted-asset",
+      "from": "review-candidate",
+      "to": "adopted-asset",
+      "label": "promote",
+      "variant": "emphasis"
+    },
+    {
+      "id": "review-candidate-to-rejected-candidate",
+      "from": "review-candidate",
+      "to": "rejected-candidate",
+      "label": "reject",
+      "variant": "default",
+      "labelAt": [
+        745,
+        210
+      ]
+    },
+    {
+      "id": "adopted-asset-to-export-record",
+      "from": "adopted-asset",
+      "to": "export-record",
+      "label": "采用时间线",
+      "variant": "default",
+      "labelAt": [
+        960,
+        210
+      ]
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "资源身份",
+      "items": [
+        "槽位 = 项目 + 资产类型 / 用途 + 实体 + variant_key。",
+        "variant_key 表示剧情状态；version 表示同一槽位的重生成次数。"
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "来源与引用",
+      "items": [
+        "source_task_id / source_script_id / source_shot_batch_id 贯穿产物。",
+        "视频与导出任务冻结精确媒体版本、有序引用与参数。"
+      ]
+    },
+    {
+      "dot": "violet",
+      "title": "版本规则",
+      "items": [
+        "promote 创建正式资产；select 改当前选择；旧版本保留。",
+        "上传可直接入正式资产；图示为模型候选主链路，非完整 ER 图。"
+      ]
+    }
+  ]
+}

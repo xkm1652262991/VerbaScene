@@ -1,0 +1,242 @@
+{
+  "schema_version": 2,
+  "diagram_type": "workflow",
+  "meta": {
+    "title": "VerbaScene · 媒体生产与成片导出",
+    "locale": "zh-CN",
+    "quality_profile": "showcase"
+  },
+  "lanes": [
+    {
+      "id": "assets",
+      "label": "资产参考图"
+    },
+    {
+      "id": "video",
+      "label": "视频片段"
+    },
+    {
+      "id": "export",
+      "label": "成片导出"
+    }
+  ],
+  "mainPath": [
+    "entity-spec",
+    "image-request",
+    "image-candidate",
+    "image-selected"
+  ],
+  "nodes": [
+    {
+      "id": "entity-spec",
+      "lane": "assets",
+      "col": 0,
+      "type": "database",
+      "label": "角色 / 场景规格",
+      "sublabel": "实体形象与状态",
+      "width": 170,
+      "height": 72
+    },
+    {
+      "id": "image-request",
+      "lane": "assets",
+      "col": 1,
+      "type": "backend",
+      "label": "参考图生成任务",
+      "sublabel": "单目标 / 父子批次",
+      "width": 170,
+      "height": 72
+    },
+    {
+      "id": "image-candidate",
+      "lane": "assets",
+      "col": 2,
+      "type": "database",
+      "label": "图片候选",
+      "sublabel": "检查 / 拒绝 / 重生成",
+      "width": 170,
+      "height": 72
+    },
+    {
+      "id": "image-selected",
+      "lane": "assets",
+      "col": 3,
+      "type": "frontend",
+      "label": "采用参考图版本",
+      "sublabel": "保留所有历史版本",
+      "width": 170,
+      "height": 72
+    },
+    {
+      "id": "video-prompt",
+      "lane": "video",
+      "col": 0,
+      "type": "backend",
+      "label": "编译最终视频 Prompt",
+      "sublabel": "Shot / 采用图 / 对白音效",
+      "width": 170,
+      "height": 72
+    },
+    {
+      "id": "video-request",
+      "lane": "video",
+      "col": 1,
+      "type": "backend",
+      "label": "冻结视频请求",
+      "sublabel": "版本 / 参数 / 首帧",
+      "width": 170,
+      "height": 72
+    },
+    {
+      "id": "video-candidate",
+      "lane": "video",
+      "col": 2,
+      "type": "database",
+      "label": "视频候选",
+      "sublabel": "模型视频与原生音轨",
+      "width": 170,
+      "height": 72
+    },
+    {
+      "id": "video-selected",
+      "lane": "video",
+      "col": 3,
+      "type": "frontend",
+      "label": "采用片段视频",
+      "sublabel": "人工选择满意版本",
+      "width": 170,
+      "height": 72
+    },
+    {
+      "id": "export-snapshot",
+      "lane": "export",
+      "col": 0,
+      "type": "backend",
+      "label": "冻结导出时间线",
+      "sublabel": "已采用片段的顺序与版本",
+      "width": 170,
+      "height": 72
+    },
+    {
+      "id": "normalize-clips",
+      "lane": "export",
+      "col": 1,
+      "type": "backend",
+      "label": "规范化媒体",
+      "sublabel": "尺寸 / 编码 / 音轨",
+      "width": 170,
+      "height": 72
+    },
+    {
+      "id": "subtitle-compose",
+      "lane": "export",
+      "col": 2,
+      "type": "backend",
+      "label": "拼接与字幕叠加",
+      "sublabel": "无 / 英文 / 中英",
+      "width": 170,
+      "height": 72
+    },
+    {
+      "id": "final-export",
+      "lane": "export",
+      "col": 3,
+      "type": "database",
+      "label": "版本化成片",
+      "sublabel": "成片版本 + 清单",
+      "width": 170,
+      "height": 72
+    }
+  ],
+  "edges": [
+    {
+      "id": "entity-spec-to-image-request",
+      "from": "entity-spec",
+      "to": "image-request",
+      "label": "提交生成",
+      "variant": "emphasis"
+    },
+    {
+      "id": "image-request-to-image-candidate",
+      "from": "image-request",
+      "to": "image-candidate",
+      "label": "生成结果",
+      "variant": "emphasis"
+    },
+    {
+      "id": "image-candidate-to-image-selected",
+      "from": "image-candidate",
+      "to": "image-selected",
+      "label": "人工采用",
+      "variant": "emphasis"
+    },
+    {
+      "id": "video-prompt-to-video-request",
+      "from": "video-prompt",
+      "to": "video-request",
+      "label": "发起生成",
+      "variant": "emphasis"
+    },
+    {
+      "id": "video-request-to-video-candidate",
+      "from": "video-request",
+      "to": "video-candidate",
+      "label": "Adapter 执行",
+      "variant": "emphasis"
+    },
+    {
+      "id": "video-candidate-to-video-selected",
+      "from": "video-candidate",
+      "to": "video-selected",
+      "label": "人工采用",
+      "variant": "emphasis"
+    },
+    {
+      "id": "export-snapshot-to-normalize-clips",
+      "from": "export-snapshot",
+      "to": "normalize-clips",
+      "label": "冻结版本",
+      "variant": "emphasis"
+    },
+    {
+      "id": "normalize-clips-to-subtitle-compose",
+      "from": "normalize-clips",
+      "to": "subtitle-compose",
+      "label": "标准化片段",
+      "variant": "emphasis"
+    },
+    {
+      "id": "subtitle-compose-to-final-export",
+      "from": "subtitle-compose",
+      "to": "final-export",
+      "label": "写入成片",
+      "variant": "emphasis"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "生成与返工",
+      "items": [
+        "每行是用户独立发起的生产动作；上一行采用版本成为下一行输入。",
+        "可单独重生成状态、图片或片段；上传可直入资产；旧版本保留。"
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "视频输入合同",
+      "items": [
+        "主路径使用角色 / 场景参考图 + 文本；首帧必须显式选择。",
+        "上游编辑只标记 Prompt 过期；人工稿由用户主动重编译。"
+      ]
+    },
+    {
+      "dot": "violet",
+      "title": "音轨与字幕",
+      "items": [
+        "保留原生音轨；无音轨片段补等长静音。",
+        "字幕时间：人工 > 可选 ASR > 确定性规则；ASR 不改对白文本。"
+      ]
+    }
+  ]
+}
